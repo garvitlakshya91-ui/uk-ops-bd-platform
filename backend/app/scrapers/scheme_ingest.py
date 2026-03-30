@@ -35,38 +35,110 @@ logger = structlog.get_logger(__name__)
 # Operator extraction from description text
 # ---------------------------------------------------------------------------
 
-# Patterns that commonly introduce operator/supplier names in tender descriptions
+# Patterns that commonly introduce operator/supplier names in tender descriptions.
+#
+# IMPORTANT: The captured group uses a NON-GREEDY quantifier and must end with a
+# recognised company-name suffix (Ltd, Plc, LLP, etc.) to avoid grabbing sentence
+# fragments.  Max ~80 chars keeps matches tight.
+#
+# Suffixes that indicate a real company name (anchored at word boundary):
+_CO_SUFFIX = (
+    r"(?:Ltd\.?|Limited|Plc|PLC|LLP|CIC|CIO|Inc|"
+    r"Group|(?:Housing\s+)?Association|Society|Trust|Foundation|Co-operative|"
+    r"(?:Services|Management|Housing|Homes|Living|Maintenance|Solutions|Consulting)"
+    r"(?:\s+(?:Ltd\.?|Limited|Plc|PLC|LLP|CIC|Group))?"
+    r")"
+)
+
+# A company name: starts with a capital letter, up to 80 chars, non-greedy,
+# ending with an approved suffix at a word boundary.
+_CO_NAME = rf"([A-Z][A-Za-z0-9\s&'.\-]{{3,78}}?\b{_CO_SUFFIX})\b"
+
 _OPERATOR_PATTERNS = [
     # "awarded to <company>"
-    re.compile(r"(?:awarded|appointed|selected|contracted)\s+to\s+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing))", re.IGNORECASE),
+    re.compile(rf"(?:awarded|appointed|selected|contracted)\s+to\s+{_CO_NAME}", re.IGNORECASE),
     # "contract with <company>"
-    re.compile(r"(?:contract|agreement|arrangement)\s+with\s+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing))", re.IGNORECASE),
-    # "managed by <company>"
-    re.compile(r"(?:managed|operated|delivered|provided|run)\s+by\s+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing))", re.IGNORECASE),
+    re.compile(rf"(?:contract|agreement|arrangement)\s+with\s+{_CO_NAME}", re.IGNORECASE),
+    # "managed by <company>"  — but NOT "managed by the Council" (see blacklist)
+    re.compile(rf"(?:managed|operated|delivered|provided|run)\s+by\s+{_CO_NAME}", re.IGNORECASE),
     # "the provider is <company>" / "the operator is <company>"
-    re.compile(r"(?:provider|operator|supplier|contractor|manager)\s+(?:is|will be|shall be)\s+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing))", re.IGNORECASE),
+    re.compile(rf"(?:provider|operator|supplier|contractor|manager)\s+(?:is|will be|shall be)\s+{_CO_NAME}", re.IGNORECASE),
     # "incumbent: <company>" or "current provider: <company>"
-    re.compile(r"(?:incumbent|current\s+(?:provider|operator|contractor|supplier))[\s:]+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing))", re.IGNORECASE),
+    re.compile(rf"(?:incumbent|current\s+(?:provider|operator|contractor|supplier))[\s:]+{_CO_NAME}", re.IGNORECASE),
 ]
+
+# Words/phrases that appear in sentence fragments but never in real company names
+_OPERATOR_BLACKLIST_WORDS = {
+    "required", "suitably", "qualified", "experienced", "provision",
+    "provide", "ensure", "undertake", "carry out", "responsible",
+    "the council", "the authority", "the client", "we are", "will be",
+    "contractors to", "services to", "services for", "this contract",
+    "in accordance", "as part of", "as set out", "in relation to",
+    "including but", "minimum of", "maximum of", "a range of",
+    "the programme", "the service", "this is", "split into",
+    "be responsible", "full details", "related to", "scope of",
+    "all housing", "range of housing", "and be responsible",
+}
+
+# Sentence-continuation patterns that indicate the capture went too far
+_POST_NAME_JUNK_RE = re.compile(
+    r"[,.]?\s+(?:the|this|and|or|a|an|is|are|was|were|will|shall|has|have|"
+    r"which|that|who|where|full|for|to|in|on|at|by|of|we|it)\s",
+    re.IGNORECASE,
+)
+
+
+def _clean_captured_name(raw_name: str) -> str:
+    """Trim a regex-captured name: if it contains sentence continuation
+    (e.g. 'Flagship Group, this is split into...'), keep only the part
+    before the junk starts."""
+    # Also trim at the first period followed by a space + uppercase
+    for delim_re in [_POST_NAME_JUNK_RE, re.compile(r"\.\s+[A-Z]")]:
+        m = delim_re.search(raw_name)
+        if m:
+            raw_name = raw_name[:m.start()]
+    return raw_name.strip().rstrip(".,;:")
 
 
 def _extract_operator_from_text(text: str) -> str:
-    """Try to extract an operator/supplier company name from description text."""
+    """Try to extract an operator/supplier company name from description text.
+
+    Returns an empty string if no confident match is found.  The patterns
+    require a recognised company-name suffix (Ltd, Plc, Association, etc.)
+    and the result is validated against a blacklist of common sentence
+    fragments.
+    """
     if not text:
         return ""
     for pattern in _OPERATOR_PATTERNS:
         match = pattern.search(text)
         if match:
-            name = match.group(1).strip().rstrip(".,")
-            if _is_valid_company_name(name) and len(name) >= 5:
-                return name
+            name = _clean_captured_name(match.group(1).strip())
+            name = name.rstrip(".,;:")
+            if not _is_valid_company_name(name) or len(name) < 5:
+                continue
+            # Reject sentence fragments
+            name_lower = name.lower()
+            if any(bw in name_lower for bw in _OPERATOR_BLACKLIST_WORDS):
+                continue
+            # Reject if more than 8 words (real company names are shorter)
+            if len(name.split()) > 8:
+                continue
+            return name
     return ""
 
 
+# Asset manager suffixes include investment-specific terms
+_AM_SUFFIX = (
+    rf"(?:{_CO_SUFFIX[4:-1]}|"  # re-use company suffixes minus outer parens
+    r"Capital|Partners|Advisors|Advisers|Investment(?:s)?|REIT|Asset\s+Management)"
+)
+_AM_NAME = rf"([A-Z][A-Za-z0-9\s&'.\-]{{3,78}}?\b{_AM_SUFFIX})\b"
+
 _ASSET_MANAGER_PATTERNS = [
-    re.compile(r"asset\s+manag(?:er|ement)\s+(?:is|by|provided by|:)\s+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing|Capital|Partners|Advisors))", re.IGNORECASE),
-    re.compile(r"(?:asset\s+manager|AM\s+provider|asset\s+management\s+(?:company|provider|firm))[\s:]+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Capital|Partners|Advisors))", re.IGNORECASE),
-    re.compile(r"(?:managed|overseen)\s+(?:by|through)\s+([A-Z][A-Za-z\s&'.,\-]+(?:Capital|Partners|Advisors|Asset|Management|Investment))", re.IGNORECASE),
+    re.compile(rf"asset\s+manag(?:er|ement)\s+(?:is|by|provided by|:)\s+{_AM_NAME}", re.IGNORECASE),
+    re.compile(rf"(?:asset\s+manager|AM\s+provider|asset\s+management\s+(?:company|provider|firm))[\s:]+{_AM_NAME}", re.IGNORECASE),
+    re.compile(rf"(?:fund\s+manager|investment\s+manager)[\s:]+{_AM_NAME}", re.IGNORECASE),
 ]
 
 
@@ -77,9 +149,16 @@ def _extract_asset_manager_from_text(text: str) -> str:
     for pattern in _ASSET_MANAGER_PATTERNS:
         match = pattern.search(text)
         if match:
-            name = match.group(1).strip().rstrip(".,")
-            if _is_valid_company_name(name) and len(name) >= 5:
-                return name
+            name = _clean_captured_name(match.group(1).strip())
+            name = name.rstrip(".,;:")
+            if not _is_valid_company_name(name) or len(name) < 5:
+                continue
+            name_lower = name.lower()
+            if any(bw in name_lower for bw in _OPERATOR_BLACKLIST_WORDS):
+                continue
+            if len(name.split()) > 8:
+                continue
+            return name
     return ""
 
 
@@ -197,24 +276,42 @@ def _normalize_name(name: str) -> str:
 
 
 def _is_valid_company_name(name: str) -> bool:
-    """Reject garbage company names from scraping artefacts."""
+    """Reject garbage company names, scraping artefacts, and sentence fragments."""
     s = name.strip()
     if not s or len(s) < 3:
         return False
-    if len(s) > 200:
-        return False  # Scraped HTML text
+    if len(s) > 120:
+        return False  # Way too long for a company name
     # Reject planning application references (e.g. "2015/06678/PA")
     if re.match(r"^\d{4}/\d+", s):
         return False
     # Reject strings that look like notice IDs or URLs
     if re.match(r"^(http|www\.|ocds-|ocid)", s, re.IGNORECASE):
         return False
-    # Reject if it contains "Notice identifier" or "Published" (scraped HTML)
+    # Reject if it contains scraped HTML artefacts
     if re.search(r"Notice identifier|Published \d|view related|Watch this notice", s, re.IGNORECASE):
         return False
     # Reject if mostly numbers/punctuation
     alpha_ratio = sum(1 for c in s if c.isalpha()) / len(s) if s else 0
     if alpha_ratio < 0.4:
+        return False
+    # Reject sentence-like text: starts with articles/prepositions/pronouns
+    if re.match(
+        r"^(?:the|a|an|to|for|in|on|at|by|of|with|from|and|or|is|are|"
+        r"was|were|this|that|it|we|our|all|any|its|their|these|those)\s",
+        s, re.IGNORECASE,
+    ):
+        return False
+    # Reject if name starts with a common verb/adjective (not a company name)
+    if re.match(
+        r"^(?:required|suitably|qualified|provide|ensure|carry|including|"
+        r"minimum|maximum|various|several|appropriate|necessary|relevant)\b",
+        s, re.IGNORECASE,
+    ):
+        return False
+    # Company names start with a capital letter (or abbreviation)
+    first_word = s.split()[0] if s.split() else ""
+    if first_word and first_word[0].islower() and not first_word.isupper():
         return False
     return True
 

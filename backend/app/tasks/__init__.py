@@ -101,9 +101,9 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=0),
         "options": {"queue": "enrichment"},
     },
-    "enrich-all-companies-psc-weekly": {
+    "enrich-all-companies-psc-daily": {
         "task": "app.tasks.enrichment_tasks.enrich_all_companies_psc",
-        "schedule": crontab(hour=5, minute=0, day_of_week="thursday"),
+        "schedule": crontab(hour=5, minute=0),
         "options": {"queue": "enrichment"},
     },
     "cross-reference-planning-schemes-daily": {
@@ -146,6 +146,11 @@ celery_app.conf.beat_schedule = {
     "enrich-companies-charity-weekly": {
         "task": "app.tasks.enrichment_tasks.enrich_companies_charity_status",
         "schedule": crontab(hour=6, minute=0, day_of_week="saturday"),
+        "options": {"queue": "enrichment"},
+    },
+    "reprocess-operator-extraction-weekly": {
+        "task": "app.tasks.enrichment_tasks.reprocess_operator_extraction",
+        "schedule": crontab(hour=5, minute=30, day_of_week="sunday"),
         "options": {"queue": "enrichment"},
     },
 }

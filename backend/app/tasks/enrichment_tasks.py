@@ -1065,3 +1065,123 @@ def enrich_companies_charity_status() -> dict[str, Any]:
 
     finally:
         db.close()
+
+
+@celery_app.task(
+    name="app.tasks.enrichment_tasks.reprocess_operator_extraction",
+    acks_late=True,
+)
+def reprocess_operator_extraction() -> dict[str, Any]:
+    """Re-run operator and asset-manager extraction on existing contracts.
+
+    Clears bad operator links (those that look like sentence fragments) and
+    re-extracts using the tightened regex patterns.  Also extracts asset
+    managers for schemes that don't have one yet.
+
+    Designed to run once after a regex fix, or weekly to catch improvements.
+    """
+    db = _get_db()
+    try:
+        from app.models.models import Company, ExistingScheme, SchemeContract
+        from app.scrapers.scheme_ingest import (
+            _extract_asset_manager_from_text,
+            _extract_operator_from_text,
+            _find_or_create_company,
+            _is_valid_company_name,
+        )
+
+        # ---- 1. Clean up bad operator names on contracts ----
+        contracts_with_op = (
+            db.query(SchemeContract)
+            .filter(SchemeContract.operator_company_id.isnot(None))
+            .all()
+        )
+
+        cleaned = 0
+        for contract in contracts_with_op:
+            if contract.operator_company_id:
+                company = db.query(Company).get(contract.operator_company_id)
+                if company and not _is_valid_company_name(company.name):
+                    contract.operator_company_id = None
+                    cleaned += 1
+
+        if cleaned:
+            db.commit()
+            logger.info("reprocess_operator_cleaned_bad_links", cleaned=cleaned)
+
+        # ---- 2. Re-extract operators from description for contracts without one ----
+        contracts_no_op = (
+            db.query(SchemeContract)
+            .filter(SchemeContract.operator_company_id.is_(None))
+            .all()
+        )
+
+        operators_extracted = 0
+        for contract in contracts_no_op:
+            raw_data = contract.raw_data or {}
+            description = raw_data.get("description", "")
+            title = raw_data.get("title", "")
+
+            supplier = _extract_operator_from_text(description)
+            if not supplier:
+                supplier = _extract_operator_from_text(title)
+            if not supplier:
+                continue
+
+            company = _find_or_create_company(supplier, db, company_type="Operator")
+            if company:
+                contract.operator_company_id = company.id
+                operators_extracted += 1
+
+                # Also set on scheme if missing
+                scheme = db.query(ExistingScheme).get(contract.scheme_id)
+                if scheme and not scheme.operator_company_id:
+                    scheme.operator_company_id = company.id
+
+        db.commit()
+
+        # ---- 3. Extract asset managers ----
+        schemes_no_am = (
+            db.query(ExistingScheme)
+            .filter(ExistingScheme.asset_manager_company_id.is_(None))
+            .all()
+        )
+
+        am_extracted = 0
+        for scheme in schemes_no_am:
+            # Get the latest contract for this scheme to read its description
+            contract = (
+                db.query(SchemeContract)
+                .filter(SchemeContract.scheme_id == scheme.id)
+                .order_by(SchemeContract.created_at.desc())
+                .first()
+            )
+            if not contract:
+                continue
+
+            raw_data = contract.raw_data or {}
+            description = raw_data.get("description", "")
+
+            am_name = _extract_asset_manager_from_text(description)
+            if not am_name:
+                continue
+
+            am_company = _find_or_create_company(am_name, db, company_type="Asset Manager")
+            if am_company:
+                scheme.asset_manager_company_id = am_company.id
+                am_extracted += 1
+
+        db.commit()
+
+        result = {
+            "bad_operators_cleaned": cleaned,
+            "contracts_scanned": len(contracts_no_op),
+            "operators_extracted": operators_extracted,
+            "schemes_scanned_for_am": len(schemes_no_am),
+            "asset_managers_extracted": am_extracted,
+        }
+        logger.info("reprocess_operator_extraction_completed", **result)
+        return result
+
+    finally:
+        db.close()
