@@ -27,6 +27,9 @@ from app.models.models import (
     Contact,
     ScraperRun,
 )
+from app.api.auth import get_current_user, require_role
+from app.models.user import User
+from app.api.permissions import get_allowed_alert_types
 
 router = APIRouter(prefix="/api", tags=["Frontend Adapters"])
 
@@ -53,7 +56,7 @@ class DashboardStatsAdapted(BaseModel):
 
 
 @router.get("/dashboard/stats", response_model=DashboardStatsAdapted)
-def dashboard_stats_adapted(db: Session = Depends(get_db)):
+def dashboard_stats_adapted(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     now = datetime.datetime.now(datetime.timezone.utc)
     week_ago = now - datetime.timedelta(days=7)
     today = datetime.date.today()
@@ -115,6 +118,7 @@ class TrendPoint(BaseModel):
 @router.get("/dashboard/trends", response_model=list[TrendPoint])
 def dashboard_trends(
     days: int = Query(30, ge=1, le=365),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     today = datetime.date.today()
@@ -179,7 +183,7 @@ class TopOpportunity(BaseModel):
 
 
 @router.get("/dashboard/top-opportunities", response_model=list[TopOpportunity])
-def dashboard_top_opportunities(db: Session = Depends(get_db)):
+def dashboard_top_opportunities(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     opps = (
         db.query(PipelineOpportunity)
         .options(
@@ -264,7 +268,7 @@ class ApplicationFlatListResponse(BaseModel):
 
 
 @router.get("/v2/application-councils")
-def list_application_councils(db: Session = Depends(get_db)):
+def list_application_councils(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Return list of councils that have planning applications (for filter dropdowns)."""
     results = (
         db.query(Council.name)
@@ -287,6 +291,7 @@ def list_applications_flat(
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_dir: Optional[str] = "desc",
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     from sqlalchemy import or_, desc as sa_desc, asc as sa_asc
@@ -443,6 +448,7 @@ def list_pipeline_flat(
     limit: int = Query(50, ge=1, le=500),
     stage: Optional[str] = None,
     priority: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     query = (
@@ -455,6 +461,10 @@ def list_pipeline_flat(
             .joinedload(ExistingScheme.council),
         )
     )
+
+    # Auto-filter for analysts: only see their own records
+    if current_user.role == "bd_analyst":
+        query = query.filter(PipelineOpportunity.assigned_to_user_id == current_user.id)
 
     if stage is not None:
         query = query.filter(PipelineOpportunity.stage == stage)
@@ -692,6 +702,7 @@ def list_schemes_flat(
     search: Optional[str] = None,
     scheme_type: Optional[str] = None,
     council_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     query = (
@@ -810,6 +821,7 @@ class SchemeContractFlat(BaseModel):
 @router.get("/v2/schemes/{scheme_id}/contracts", response_model=list[SchemeContractFlat])
 def get_scheme_contracts(
     scheme_id: int,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Return all contracts for a given scheme, ordered by date descending."""
@@ -879,9 +891,15 @@ def list_alerts_adapted(
     limit: int = Query(50, ge=1, le=500),
     alert_type: Optional[str] = None,
     is_read: Optional[bool] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(Alert)
+
+    # Filter alert types by role
+    allowed_types = get_allowed_alert_types(current_user)
+    if allowed_types is not None:
+        query = query.filter(Alert.type.in_(allowed_types))
 
     if alert_type is not None:
         query = query.filter(Alert.type == alert_type)
@@ -934,7 +952,7 @@ class ScraperHealthAdapted(BaseModel):
 
 
 @router.get("/v2/scrapers/health", response_model=list[ScraperHealthAdapted])
-def scraper_health_adapted(db: Session = Depends(get_db)):
+def scraper_health_adapted(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     now = datetime.datetime.now(datetime.timezone.utc)
     seven_days_ago = now - datetime.timedelta(days=7)
 
@@ -1038,7 +1056,7 @@ class TriggerAdaptedResponse(BaseModel):
     "/scrapers/{council_id}/trigger",
     response_model=TriggerAdaptedResponse,
 )
-def trigger_scraper_adapted(council_id: int, db: Session = Depends(get_db)):
+def trigger_scraper_adapted(council_id: int, current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     """Adapter: frontend sends council_id as a path param; backend trigger
     endpoint expects it in the request body.  We bridge the two."""
     council = db.query(Council).filter(Council.id == council_id).first()
@@ -1104,6 +1122,7 @@ def scraper_history_adapted(
     council_id: int,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Adapter: frontend calls GET /api/scrapers/{council_id}/history;
@@ -1168,6 +1187,7 @@ VALID_STAGES = [
 def update_pipeline_stage_adapted(
     opportunity_id: int,
     body: StageUpdateRequest,
+    current_user: User = Depends(require_role("admin", "bd_manager", "bd_analyst")),
     db: Session = Depends(get_db),
 ):
     """Adapter: frontend sends PATCH /api/pipeline/{id}/stage with JSON body;
@@ -1207,7 +1227,7 @@ class AlertReadResponse(BaseModel):
 
 
 @router.patch("/alerts/{alert_id}/read", response_model=AlertReadResponse)
-def mark_alert_read_adapted(alert_id: int, db: Session = Depends(get_db)):
+def mark_alert_read_adapted(alert_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Adapter: frontend sends PATCH /api/alerts/{id}/read;
     backend has PUT /api/alerts/{id}/read.  We bridge."""
     alert = db.query(Alert).filter(Alert.id == alert_id).first()
@@ -1275,6 +1295,7 @@ def list_companies_adapted(
     limit: int = Query(50, ge=1, le=500),
     search: Optional[str] = None,
     company_type: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     from sqlalchemy import or_
@@ -1309,8 +1330,8 @@ def list_companies_adapted(
                 id=str(c.id),
                 name=c.full_name or "",
                 role=c.job_title,
-                email=c.email,
-                phone=c.phone,
+                email=None if current_user.role == "viewer" else c.email,
+                phone=None if current_user.role == "viewer" else c.phone,
             )
             for c in (company.contacts or [])
         ]
@@ -1422,6 +1443,7 @@ def list_contracts_flat(
     source: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_dir: Optional[str] = "desc",
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     from sqlalchemy import or_, desc as sa_desc, asc as sa_asc

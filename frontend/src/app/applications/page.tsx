@@ -7,6 +7,7 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import SearchInput from '@/components/ui/SearchInput';
 import Select from '@/components/ui/Select';
+import PermissionGate from '@/components/rbac/PermissionGate';
 import api from '@/lib/api';
 
 interface ApplicationRow {
@@ -452,10 +453,12 @@ export default function ApplicationsPage() {
 
                               {/* Action Buttons */}
                               <div className="flex flex-wrap gap-2 mt-4">
-                                <button className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
-                                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
-                                  Add to Pipeline
-                                </button>
+                                <PermissionGate resource="pipeline" action="create">
+                                  <button className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
+                                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
+                                    Add to Pipeline
+                                  </button>
+                                </PermissionGate>
                                 <button className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-slate-300 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors border border-slate-600">
                                   <DocumentArrowDownIcon className="w-4 h-4" />
                                   View Documents

@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.models import PlanningApplication, Council
+from app.api.auth import get_current_user, require_role
+from app.models.user import User
 
 router = APIRouter(prefix="/api/applications", tags=["Planning Applications"])
 
@@ -123,6 +125,7 @@ def list_applications(
     date_from: Optional[datetime.date] = None,
     date_to: Optional[datetime.date] = None,
     min_units: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(PlanningApplication).options(joinedload(PlanningApplication.council))
@@ -166,6 +169,7 @@ def list_applications(
 @router.get("/recent", response_model=list[ApplicationResponse])
 def recent_applications(
     limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     items = (
@@ -179,7 +183,7 @@ def recent_applications(
 
 
 @router.get("/stats", response_model=ApplicationStats)
-def application_stats(db: Session = Depends(get_db)):
+def application_stats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     total = db.query(func.count(PlanningApplication.id)).scalar() or 0
 
     by_scheme_type = [
@@ -227,7 +231,7 @@ def application_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/{application_id}", response_model=ApplicationResponse)
-def get_application(application_id: int, db: Session = Depends(get_db)):
+def get_application(application_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     app = (
         db.query(PlanningApplication)
         .options(joinedload(PlanningApplication.council))
@@ -240,7 +244,7 @@ def get_application(application_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=ApplicationResponse, status_code=status.HTTP_201_CREATED)
-def create_application(data: ApplicationCreate, db: Session = Depends(get_db)):
+def create_application(data: ApplicationCreate, current_user: User = Depends(require_role("admin", "bd_manager", "bd_analyst")), db: Session = Depends(get_db)):
     # Check council exists
     council = db.query(Council).filter(Council.id == data.council_id).first()
     if not council:
@@ -275,6 +279,7 @@ def create_application(data: ApplicationCreate, db: Session = Depends(get_db)):
 def update_application(
     application_id: int,
     data: ApplicationUpdate,
+    current_user: User = Depends(require_role("admin", "bd_manager", "bd_analyst")),
     db: Session = Depends(get_db),
 ):
     application = (
@@ -295,7 +300,7 @@ def update_application(
 
 
 @router.delete("/{application_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_application(application_id: int, db: Session = Depends(get_db)):
+def delete_application(application_id: int, current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     application = (
         db.query(PlanningApplication)
         .filter(PlanningApplication.id == application_id)

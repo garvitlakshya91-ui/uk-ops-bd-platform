@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   ViewColumnsIcon,
   TableCellsIcon,
@@ -11,6 +12,7 @@ import {
   SparklesIcon,
   DocumentDuplicateIcon,
   CheckCircleIcon,
+  ShieldCheckIcon,
 } from '@heroicons/react/24/outline';
 import { cn, PIPELINE_STAGES, getSchemeTypeColor, getPriorityColor, getStageColor, getBdScoreColor, formatDate, formatCurrency, formatRelativeDate } from '@/lib/utils';
 import Card from '@/components/ui/Card';
@@ -20,6 +22,9 @@ import Table, { Column } from '@/components/ui/Table';
 import SearchInput from '@/components/ui/SearchInput';
 import Select from '@/components/ui/Select';
 import Modal from '@/components/ui/Modal';
+import PermissionGate from '@/components/rbac/PermissionGate';
+import { usePermissions } from '@/hooks/usePermissions';
+import { canAccessPage } from '@/lib/permissions';
 import api from '@/lib/api';
 import type { PipelineOpportunity } from '@/lib/api';
 
@@ -102,6 +107,8 @@ const columns: Column<PipelineOpportunity>[] = [
 ];
 
 export default function PipelinePage() {
+  const router = useRouter();
+  const { role } = usePermissions();
   const [view, setView] = useState<'kanban' | 'table'>('kanban');
   const [search, setSearch] = useState('');
   const [schemeFilter, setSchemeFilter] = useState('');
@@ -111,6 +118,17 @@ export default function PipelinePage() {
   const [opportunities, setOpportunities] = useState<PipelineOpportunity[]>([]);
   const [loading, setLoading] = useState(true);
   const [copiedEmail, setCopiedEmail] = useState(false);
+
+  // Redirect viewers who cannot access pipeline
+  useEffect(() => {
+    if (role && !canAccessPage(role, '/pipeline')) {
+      router.replace('/dashboard');
+    }
+  }, [role, router]);
+
+  if (role && !canAccessPage(role, '/pipeline')) {
+    return null;
+  }
 
   useEffect(() => {
     const params: Record<string, string> = {};

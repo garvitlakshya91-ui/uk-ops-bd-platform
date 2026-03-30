@@ -16,6 +16,7 @@ import { cn, formatRelativeDate } from '@/lib/utils';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Select from '@/components/ui/Select';
+import PermissionGate from '@/components/rbac/PermissionGate';
 import api from '@/lib/api';
 
 interface AlertItem {
@@ -171,9 +172,11 @@ export default function AlertsPage() {
               </span>
             </div>
           </div>
-          <button className="p-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors border border-white/10">
-            <Cog6ToothIcon className="w-5 h-5" />
-          </button>
+          <PermissionGate resource="alerts" action="create">
+            <button className="p-2.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors border border-white/10">
+              <Cog6ToothIcon className="w-5 h-5" />
+            </button>
+          </PermissionGate>
         </div>
       </div>
 

@@ -19,9 +19,13 @@ import {
   BellIcon,
   PlusIcon,
   ArrowRightOnRectangleIcon,
+  UserGroupIcon,
 } from '@heroicons/react/24/outline';
 import { cn } from '@/lib/utils';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { getVisibleNavItems } from '@/lib/permissions';
+import type { Role } from '@/lib/permissions';
+import PermissionGate from '@/components/rbac/PermissionGate';
 import './globals.css';
 
 const queryClient = new QueryClient({
@@ -34,7 +38,7 @@ const queryClient = new QueryClient({
   },
 });
 
-const navItems = [
+const allNavItems = [
   { href: '/dashboard', label: 'Dashboard', icon: HomeIcon },
   { href: '/applications', label: 'Applications', icon: DocumentTextIcon },
   { href: '/pipeline', label: 'Pipeline', icon: ViewColumnsIcon },
@@ -43,6 +47,7 @@ const navItems = [
   { href: '/companies', label: 'Companies', icon: BuildingLibraryIcon },
   { href: '/alerts', label: 'Alerts', icon: BellAlertIcon },
   { href: '/scraper-health', label: 'Scraper Health', icon: CpuChipIcon },
+  { href: '/users', label: 'Users', icon: UserGroupIcon },
 ];
 
 const ROLE_LABELS: Record<string, string> = {
@@ -123,6 +128,8 @@ function SidebarUser() {
 
 function Sidebar({ mobile, onClose }: { mobile?: boolean; onClose?: () => void }) {
   const pathname = usePathname();
+  const { user } = useAuth();
+  const navItems = getVisibleNavItems(user?.role as Role | undefined, allNavItems);
 
   return (
     <div
@@ -177,13 +184,15 @@ function Sidebar({ mobile, onClose }: { mobile?: boolean; onClose?: () => void }
       </nav>
 
       {/* Quick Actions */}
-      <div className="px-3 pb-3">
-        <p className="px-3 mb-2 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Quick Actions</p>
-        <button className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 transition-all duration-200 shadow-lg shadow-blue-500/20">
-          <PlusIcon className="w-4 h-4" />
-          <span>Add Opportunity</span>
-        </button>
-      </div>
+      <PermissionGate resource="pipeline" action="create">
+        <div className="px-3 pb-3">
+          <p className="px-3 mb-2 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Quick Actions</p>
+          <button className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 transition-all duration-200 shadow-lg shadow-blue-500/20">
+            <PlusIcon className="w-4 h-4" />
+            <span>Add Opportunity</span>
+          </button>
+        </div>
+      </PermissionGate>
 
       {/* Pipeline stats separator */}
       <div className="h-[1px] bg-gradient-to-r from-transparent via-slate-700/50 to-transparent" />

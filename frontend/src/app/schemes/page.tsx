@@ -20,6 +20,7 @@ import Badge from '@/components/ui/Badge';
 import SearchInput from '@/components/ui/SearchInput';
 import Select from '@/components/ui/Select';
 import Modal from '@/components/ui/Modal';
+import PermissionGate from '@/components/rbac/PermissionGate';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
 
@@ -745,13 +746,15 @@ export default function SchemesPage() {
                             In Pipeline
                           </a>
                         ) : scheme.operator_company_id ? (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setPipelineModalScheme(scheme); }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-blue-400 bg-blue-500/10 border border-blue-500/30 rounded-full hover:bg-blue-500/20 transition-colors"
-                          >
-                            <PlusCircleIcon className="w-3.5 h-3.5" />
-                            Add to Pipeline
-                          </button>
+                          <PermissionGate resource="pipeline" action="create" fallback={<span className="text-[11px] text-slate-600">--</span>}>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setPipelineModalScheme(scheme); }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-blue-400 bg-blue-500/10 border border-blue-500/30 rounded-full hover:bg-blue-500/20 transition-colors"
+                            >
+                              <PlusCircleIcon className="w-3.5 h-3.5" />
+                              Add to Pipeline
+                            </button>
+                          </PermissionGate>
                         ) : (
                           <span className="text-[11px] text-slate-600">No operator</span>
                         )}
@@ -861,13 +864,15 @@ export default function SchemesPage() {
                                   View in Pipeline
                                 </a>
                               ) : scheme.operator_company_id ? (
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); setPipelineModalScheme(scheme); }}
-                                  className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 rounded-lg transition-all shadow-lg shadow-blue-500/20"
-                                >
-                                  <PlusCircleIcon className="w-5 h-5" />
-                                  Add to Pipeline
-                                </button>
+                                <PermissionGate resource="pipeline" action="create">
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setPipelineModalScheme(scheme); }}
+                                    className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 rounded-lg transition-all shadow-lg shadow-blue-500/20"
+                                  >
+                                    <PlusCircleIcon className="w-5 h-5" />
+                                    Add to Pipeline
+                                  </button>
+                                </PermissionGate>
                               ) : null}
                             </div>
                           </div>

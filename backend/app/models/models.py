@@ -482,6 +482,9 @@ class PipelineOpportunity(Base):
     )
     bd_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     assigned_to: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    assigned_to_user_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     last_contact_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     next_action: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     next_action_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)

@@ -1,4 +1,5 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
+import toast from 'react-hot-toast';
 
 const api: AxiosInstance = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api',
@@ -100,6 +101,14 @@ api.interceptors.response.use(
       } finally {
         isRefreshing = false;
       }
+    }
+
+    // Handle 403 Forbidden
+    if (error.response?.status === 403) {
+      if (typeof window !== 'undefined') {
+        toast.error("You don't have permission to perform this action");
+      }
+      return Promise.reject(error);
     }
 
     return Promise.reject(error);
@@ -379,6 +388,34 @@ export async function triggerScrape(councilId: string) {
 export async function getScraperHistory(councilId: string) {
   const { data } = await api.get(`/scrapers/${councilId}/history`);
   return data;
+}
+
+// User Management
+export interface UserRecord {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  status: 'active' | 'inactive';
+  created_at: string;
+}
+
+export async function getUsers(): Promise<UserRecord[]> {
+  const { data } = await api.get('/users');
+  return data;
+}
+
+export async function updateUser(id: string, updates: { name?: string; role?: string }): Promise<UserRecord> {
+  const { data } = await api.put(`/users/${id}`, updates);
+  return data;
+}
+
+export async function deactivateUser(id: string): Promise<void> {
+  await api.put(`/users/${id}/deactivate`);
+}
+
+export async function activateUser(id: string): Promise<void> {
+  await api.put(`/users/${id}/activate`);
 }
 
 export default api;

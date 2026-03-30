@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.models import Alert
+from app.api.auth import get_current_user, require_role
+from app.models.user import User
+from app.api.permissions import get_allowed_alert_types
 
 router = APIRouter(prefix="/api/alerts", tags=["Alerts"])
 
@@ -78,9 +81,15 @@ def list_alerts(
     limit: int = Query(50, ge=1, le=500),
     alert_type: Optional[str] = None,
     is_read: Optional[bool] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(Alert)
+
+    # Filter alert types by role
+    allowed_types = get_allowed_alert_types(current_user)
+    if allowed_types is not None:
+        query = query.filter(Alert.type.in_(allowed_types))
 
     if alert_type is not None:
         query = query.filter(Alert.type == alert_type)
@@ -99,7 +108,7 @@ def list_alerts(
 
 
 @router.get("/{alert_id}", response_model=AlertResponse)
-def get_alert(alert_id: int, db: Session = Depends(get_db)):
+def get_alert(alert_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     alert = db.query(Alert).filter(Alert.id == alert_id).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -107,7 +116,7 @@ def get_alert(alert_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=AlertResponse, status_code=status.HTTP_201_CREATED)
-def create_alert(data: AlertCreate, db: Session = Depends(get_db)):
+def create_alert(data: AlertCreate, current_user: User = Depends(require_role("admin", "bd_manager")), db: Session = Depends(get_db)):
     if data.type not in VALID_ALERT_TYPES:
         raise HTTPException(
             status_code=400,
@@ -122,7 +131,7 @@ def create_alert(data: AlertCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{alert_id}/read", response_model=AlertResponse)
-def mark_alert_read(alert_id: int, db: Session = Depends(get_db)):
+def mark_alert_read(alert_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     alert = db.query(Alert).filter(Alert.id == alert_id).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -133,7 +142,7 @@ def mark_alert_read(alert_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/mark-read", response_model=dict)
-def mark_multiple_read(data: MarkReadRequest, db: Session = Depends(get_db)):
+def mark_multiple_read(data: MarkReadRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     updated = (
         db.query(Alert)
         .filter(Alert.id.in_(data.alert_ids))
@@ -144,7 +153,7 @@ def mark_multiple_read(data: MarkReadRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/mark-all-read", response_model=dict)
-def mark_all_read(db: Session = Depends(get_db)):
+def mark_all_read(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     updated = (
         db.query(Alert)
         .filter(Alert.is_read == False)  # noqa: E712
@@ -155,7 +164,7 @@ def mark_all_read(db: Session = Depends(get_db)):
 
 
 @router.delete("/{alert_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_alert(alert_id: int, db: Session = Depends(get_db)):
+def delete_alert(alert_id: int, current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     alert = db.query(Alert).filter(Alert.id == alert_id).first()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
@@ -164,7 +173,7 @@ def delete_alert(alert_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/preferences/current", response_model=AlertPreferences)
-def get_alert_preferences():
+def get_alert_preferences(current_user: User = Depends(get_current_user)):
     """Return current alert preferences.
 
     In a full implementation this would be per-user and persisted to the
@@ -175,7 +184,7 @@ def get_alert_preferences():
 
 
 @router.put("/preferences/current", response_model=AlertPreferences)
-def update_alert_preferences(prefs: AlertPreferences):
+def update_alert_preferences(prefs: AlertPreferences, current_user: User = Depends(get_current_user)):
     """Update alert preferences.
 
     In a full implementation this would persist to the database.

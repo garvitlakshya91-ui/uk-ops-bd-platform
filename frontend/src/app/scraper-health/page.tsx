@@ -1,12 +1,16 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { PlayIcon, ChevronDownIcon, ChevronUpIcon, CheckCircleIcon, ExclamationTriangleIcon, XCircleIcon } from '@heroicons/react/24/outline';
+import { useRouter } from 'next/navigation';
+import { PlayIcon, ChevronDownIcon, ChevronUpIcon, CheckCircleIcon, ExclamationTriangleIcon, XCircleIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
 import { cn, formatDate, formatRelativeDate, getHealthColor } from '@/lib/utils';
 import Card from '@/components/ui/Card';
 import StatsCard from '@/components/ui/StatsCard';
 import Badge from '@/components/ui/Badge';
 import ProgressBar from '@/components/ui/ProgressBar';
+import PermissionGate from '@/components/rbac/PermissionGate';
+import { usePermissions } from '@/hooks/usePermissions';
+import { canAccessPage } from '@/lib/permissions';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
 
@@ -59,10 +63,23 @@ function getRunDotColor(status: string): string {
 }
 
 export default function ScraperHealthPage() {
+  const router = useRouter();
+  const { role } = usePermissions();
   const [scrapers, setScrapers] = useState<ScraperRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [triggering, setTriggering] = useState<string | null>(null);
+
+  // Redirect non-admin/non-manager to dashboard
+  useEffect(() => {
+    if (role && !canAccessPage(role, '/scraper-health')) {
+      router.replace('/dashboard');
+    }
+  }, [role, router]);
+
+  if (role && !canAccessPage(role, '/scraper-health')) {
+    return null;
+  }
 
   useEffect(() => {
     api.get('/v2/scrapers/health')
@@ -340,17 +357,19 @@ export default function ScraperHealthPage() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleTrigger(scraper.council_id, scraper.council_name);
-                          }}
-                          disabled={triggering === scraper.council_id}
-                          className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-400 bg-blue-500/10 rounded hover:bg-blue-500/20 disabled:opacity-50 transition-colors"
-                        >
-                          <PlayIcon className="w-3 h-3" />
-                          {triggering === scraper.council_id ? 'Running...' : 'Run'}
-                        </button>
+                        <PermissionGate resource="scrapers" action="edit">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleTrigger(scraper.council_id, scraper.council_name);
+                            }}
+                            disabled={triggering === scraper.council_id}
+                            className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-blue-400 bg-blue-500/10 rounded hover:bg-blue-500/20 disabled:opacity-50 transition-colors"
+                          >
+                            <PlayIcon className="w-3 h-3" />
+                            {triggering === scraper.council_id ? 'Running...' : 'Run'}
+                          </button>
+                        </PermissionGate>
                       </td>
                     </tr>
                     {expandedId === scraper.council_id && (

@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.models import Company, CompanyAlias, Contact
+from app.api.auth import get_current_user, require_role
+from app.models.user import User
 
 router = APIRouter(prefix="/api/companies", tags=["Companies"])
 
@@ -143,6 +145,7 @@ def list_companies(
     search: Optional[str] = None,
     company_type: Optional[str] = None,
     is_active: Optional[bool] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(Company)
@@ -168,15 +171,21 @@ def list_companies(
 
 
 @router.get("/{company_id}", response_model=CompanyResponse)
-def get_company(company_id: int, db: Session = Depends(get_db)):
+def get_company(company_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
+    # Strip contact PII for viewers
+    if current_user.role == "viewer":
+        for contact in company.contacts:
+            contact.email = None
+            contact.phone = None
+            contact.linkedin_url = None
     return company
 
 
 @router.post("", response_model=CompanyResponse, status_code=status.HTTP_201_CREATED)
-def create_company(data: CompanyCreate, db: Session = Depends(get_db)):
+def create_company(data: CompanyCreate, current_user: User = Depends(require_role("admin", "bd_manager", "bd_analyst")), db: Session = Depends(get_db)):
     company_data = data.model_dump()
     if not company_data.get("normalized_name"):
         company_data["normalized_name"] = _normalize_name(company_data["name"])
@@ -192,6 +201,7 @@ def create_company(data: CompanyCreate, db: Session = Depends(get_db)):
 def update_company(
     company_id: int,
     data: CompanyUpdate,
+    current_user: User = Depends(require_role("admin", "bd_manager", "bd_analyst")),
     db: Session = Depends(get_db),
 ):
     company = db.query(Company).filter(Company.id == company_id).first()
@@ -210,7 +220,7 @@ def update_company(
 
 
 @router.delete("/{company_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_company(company_id: int, db: Session = Depends(get_db)):
+def delete_company(company_id: int, current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -219,7 +229,7 @@ def delete_company(company_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/merge", response_model=MergeDuplicatesResponse)
-def merge_duplicates(data: MergeDuplicatesRequest, db: Session = Depends(get_db)):
+def merge_duplicates(data: MergeDuplicatesRequest, current_user: User = Depends(require_role("admin", "bd_manager")), db: Session = Depends(get_db)):
     """Merge duplicate companies into a single primary company.
 
     All contacts, aliases, and FK references from duplicate companies are
@@ -295,7 +305,7 @@ def merge_duplicates(data: MergeDuplicatesRequest, db: Session = Depends(get_db)
 # ---------------------------------------------------------------------------
 
 @router.get("/{company_id}/contacts", response_model=list[ContactResponse])
-def list_contacts(company_id: int, db: Session = Depends(get_db)):
+def list_contacts(company_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.id == company_id).first()
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -303,7 +313,7 @@ def list_contacts(company_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/contacts", response_model=ContactResponse, status_code=status.HTTP_201_CREATED)
-def create_contact(data: ContactCreate, db: Session = Depends(get_db)):
+def create_contact(data: ContactCreate, current_user: User = Depends(require_role("admin", "bd_manager", "bd_analyst")), db: Session = Depends(get_db)):
     company = db.query(Company).filter(Company.id == data.company_id).first()
     if not company:
         raise HTTPException(status_code=400, detail="Company not found")
@@ -319,6 +329,7 @@ def create_contact(data: ContactCreate, db: Session = Depends(get_db)):
 def update_contact(
     contact_id: int,
     data: ContactUpdate,
+    current_user: User = Depends(require_role("admin", "bd_manager", "bd_analyst")),
     db: Session = Depends(get_db),
 ):
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
@@ -335,7 +346,7 @@ def update_contact(
 
 
 @router.delete("/contacts/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_contact(contact_id: int, db: Session = Depends(get_db)):
+def delete_contact(contact_id: int, current_user: User = Depends(require_role("admin", "bd_manager")), db: Session = Depends(get_db)):
     contact = db.query(Contact).filter(Contact.id == contact_id).first()
     if not contact:
         raise HTTPException(status_code=404, detail="Contact not found")

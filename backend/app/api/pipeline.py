@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.models import PipelineOpportunity, Company, Contact, PlanningApplication, ExistingScheme
+from app.api.auth import get_current_user, require_role
+from app.models.user import User
+from app.api.permissions import can_edit_pipeline, check_analyst_stage_gating
 
 router = APIRouter(prefix="/api/pipeline", tags=["Pipeline"])
 
@@ -147,6 +150,7 @@ def list_opportunities(
     company_id: Optional[int] = None,
     sort_by: str = Query("created_at", pattern="^(created_at|bd_score|next_action_date|updated_at)$"),
     sort_order: str = Query("desc", pattern="^(asc|desc)$"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(PipelineOpportunity).options(
@@ -154,6 +158,10 @@ def list_opportunities(
         joinedload(PipelineOpportunity.planning_application),
         joinedload(PipelineOpportunity.scheme),
     )
+
+    # Auto-filter for analysts: only see their own records
+    if current_user.role == "bd_analyst":
+        query = query.filter(PipelineOpportunity.assigned_to_user_id == current_user.id)
 
     if stage is not None:
         query = query.filter(PipelineOpportunity.stage == stage)
@@ -179,7 +187,7 @@ def list_opportunities(
 
 
 @router.get("/stats", response_model=PipelineStats)
-def pipeline_stats(db: Session = Depends(get_db)):
+def pipeline_stats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     total = db.query(func.count(PipelineOpportunity.id)).scalar() or 0
 
     by_stage = [
@@ -210,6 +218,7 @@ def pipeline_stats(db: Session = Depends(get_db)):
 def kanban_board(
     assigned_to: Optional[str] = None,
     priority: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Return pipeline data structured as a kanban board with one column per stage."""
@@ -220,6 +229,10 @@ def kanban_board(
             joinedload(PipelineOpportunity.planning_application),
             joinedload(PipelineOpportunity.scheme),
         ).filter(PipelineOpportunity.stage == stage)
+
+        # Auto-filter for analysts: only see their own records
+        if current_user.role == "bd_analyst":
+            query = query.filter(PipelineOpportunity.assigned_to_user_id == current_user.id)
 
         if assigned_to is not None:
             query = query.filter(PipelineOpportunity.assigned_to == assigned_to)
@@ -236,7 +249,7 @@ def kanban_board(
 
 
 @router.get("/{opportunity_id}", response_model=OpportunityResponse)
-def get_opportunity(opportunity_id: int, db: Session = Depends(get_db)):
+def get_opportunity(opportunity_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     opp = (
         db.query(PipelineOpportunity)
         .options(
@@ -249,11 +262,14 @@ def get_opportunity(opportunity_id: int, db: Session = Depends(get_db)):
     )
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunity not found")
+    # 403 if analyst and not assigned to this record
+    if current_user.role == "bd_analyst" and opp.assigned_to_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have permission to view this opportunity")
     return opp
 
 
 @router.post("", response_model=OpportunityResponse, status_code=status.HTTP_201_CREATED)
-def create_opportunity(data: OpportunityCreate, db: Session = Depends(get_db)):
+def create_opportunity(data: OpportunityCreate, current_user: User = Depends(require_role("admin", "bd_manager", "bd_analyst")), db: Session = Depends(get_db)):
     if data.stage not in VALID_STAGES:
         raise HTTPException(status_code=400, detail=f"Invalid stage. Must be one of: {VALID_STAGES}")
     if data.priority not in VALID_PRIORITIES:
@@ -271,7 +287,15 @@ def create_opportunity(data: OpportunityCreate, db: Session = Depends(get_db)):
         if existing:
             raise HTTPException(status_code=409, detail="A pipeline opportunity already exists for this scheme")
 
+    # Stage gating for analysts
+    check_analyst_stage_gating(current_user, data.stage)
+
     opp = PipelineOpportunity(**data.model_dump())
+
+    # Auto-set assigned_to_user_id for analysts
+    if current_user.role == "bd_analyst":
+        opp.assigned_to_user_id = current_user.id
+
     db.add(opp)
     db.commit()
     db.refresh(opp)
@@ -305,13 +329,23 @@ def create_opportunity(data: OpportunityCreate, db: Session = Depends(get_db)):
 def update_opportunity(
     opportunity_id: int,
     data: OpportunityUpdate,
+    current_user: User = Depends(require_role("admin", "bd_manager", "bd_analyst")),
     db: Session = Depends(get_db),
 ):
     opp = db.query(PipelineOpportunity).filter(PipelineOpportunity.id == opportunity_id).first()
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunity not found")
 
+    # Analyst can only edit own records
+    if not can_edit_pipeline(current_user, opp):
+        raise HTTPException(status_code=403, detail="You do not have permission to edit this opportunity")
+
     update_data = data.model_dump(exclude_unset=True)
+
+    # Stage gating for analysts
+    if "stage" in update_data:
+        check_analyst_stage_gating(current_user, update_data["stage"])
+
     if "stage" in update_data and update_data["stage"] not in VALID_STAGES:
         raise HTTPException(status_code=400, detail=f"Invalid stage. Must be one of: {VALID_STAGES}")
     if "priority" in update_data and update_data["priority"] not in VALID_PRIORITIES:
@@ -339,6 +373,7 @@ def update_opportunity(
 def update_stage(
     opportunity_id: int,
     stage: str = Query(...),
+    current_user: User = Depends(require_role("admin", "bd_manager", "bd_analyst")),
     db: Session = Depends(get_db),
 ):
     if stage not in VALID_STAGES:
@@ -347,6 +382,13 @@ def update_stage(
     opp = db.query(PipelineOpportunity).filter(PipelineOpportunity.id == opportunity_id).first()
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunity not found")
+
+    # Analyst can only edit own records
+    if not can_edit_pipeline(current_user, opp):
+        raise HTTPException(status_code=403, detail="You do not have permission to edit this opportunity")
+
+    # Stage gating for analysts
+    check_analyst_stage_gating(current_user, stage)
 
     opp.stage = stage
     db.commit()
@@ -365,7 +407,7 @@ def update_stage(
 
 
 @router.post("/bulk-update-stage", response_model=dict)
-def bulk_update_stage(data: BulkStageUpdate, db: Session = Depends(get_db)):
+def bulk_update_stage(data: BulkStageUpdate, current_user: User = Depends(require_role("admin", "bd_manager")), db: Session = Depends(get_db)):
     if data.stage not in VALID_STAGES:
         raise HTTPException(status_code=400, detail=f"Invalid stage. Must be one of: {VALID_STAGES}")
 
@@ -379,7 +421,7 @@ def bulk_update_stage(data: BulkStageUpdate, db: Session = Depends(get_db)):
 
 
 @router.delete("/{opportunity_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_opportunity(opportunity_id: int, db: Session = Depends(get_db)):
+def delete_opportunity(opportunity_id: int, current_user: User = Depends(require_role("admin", "bd_manager")), db: Session = Depends(get_db)):
     opp = db.query(PipelineOpportunity).filter(PipelineOpportunity.id == opportunity_id).first()
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunity not found")

@@ -15,6 +15,8 @@ from app.models.models import (
     ScraperRun,
     Alert,
 )
+from app.api.auth import get_current_user
+from app.models.user import User
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
 
@@ -76,7 +78,7 @@ class DashboardStats(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.get("", response_model=DashboardStats)
-def dashboard_stats(db: Session = Depends(get_db)):
+def dashboard_stats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     from app.models.models import Company
 
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -213,6 +215,10 @@ def dashboard_stats(db: Session = Depends(get_db)):
                 is_overdue=is_overdue,
             )
         )
+
+    # Exclude scraper_health for viewer and analyst roles
+    if current_user.role in ("viewer", "bd_analyst"):
+        scraper_health_list = []
 
     return DashboardStats(
         total_applications=total_applications,

@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.models.models import ExistingScheme, Company, Council, SchemeContract, SchemeChangeLog
+from app.api.auth import get_current_user, require_role
+from app.models.user import User
 
 router = APIRouter(prefix="/api/schemes", tags=["Existing Schemes"])
 
@@ -162,6 +164,7 @@ def list_schemes(
         pattern="^(name|num_units|performance_rating|satisfaction_score|financial_health_score|contract_end_date)$",
     ),
     sort_order: str = Query("asc", pattern="^(asc|desc)$"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(ExistingScheme).options(
@@ -210,6 +213,7 @@ def expiring_schemes(
     months: int = Query(12, ge=1, le=60, description="Months until contract expiry"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """List schemes with contracts expiring within the given number of months."""
@@ -246,6 +250,7 @@ def expiring_schemes(
 @router.get("/contract-timeline")
 def contract_timeline(
     months_ahead: int = Query(24, ge=1, le=60),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Get all contracts expiring within the given window, grouped by month."""
@@ -289,7 +294,7 @@ def contract_timeline(
 
 
 @router.get("/{scheme_id}", response_model=SchemeResponse)
-def get_scheme(scheme_id: int, db: Session = Depends(get_db)):
+def get_scheme(scheme_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     scheme = (
         db.query(ExistingScheme)
         .options(
@@ -308,7 +313,7 @@ def get_scheme(scheme_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=SchemeResponse, status_code=status.HTTP_201_CREATED)
-def create_scheme(data: SchemeCreate, db: Session = Depends(get_db)):
+def create_scheme(data: SchemeCreate, current_user: User = Depends(require_role("admin", "bd_manager")), db: Session = Depends(get_db)):
     scheme = ExistingScheme(**data.model_dump())
     db.add(scheme)
     db.commit()
@@ -331,6 +336,7 @@ def create_scheme(data: SchemeCreate, db: Session = Depends(get_db)):
 def update_scheme(
     scheme_id: int,
     data: SchemeUpdate,
+    current_user: User = Depends(require_role("admin", "bd_manager")),
     db: Session = Depends(get_db),
 ):
     scheme = db.query(ExistingScheme).filter(ExistingScheme.id == scheme_id).first()
@@ -357,7 +363,7 @@ def update_scheme(
 
 
 @router.get("/{scheme_id}/contracts", response_model=list[SchemeContractResponse])
-def get_scheme_contracts(scheme_id: int, db: Session = Depends(get_db)):
+def get_scheme_contracts(scheme_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Get full contract history for a scheme, newest first."""
     scheme = db.query(ExistingScheme).filter(ExistingScheme.id == scheme_id).first()
     if not scheme:
@@ -380,6 +386,7 @@ def get_scheme_audit_log(
     scheme_id: int,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(require_role("admin", "bd_manager", "bd_analyst")),
     db: Session = Depends(get_db),
 ):
     """Get change history for a scheme."""
@@ -398,7 +405,7 @@ def get_scheme_audit_log(
 
 
 @router.post("/{scheme_id}/refresh", status_code=status.HTTP_202_ACCEPTED)
-def trigger_scheme_refresh(scheme_id: int, db: Session = Depends(get_db)):
+def trigger_scheme_refresh(scheme_id: int, current_user: User = Depends(require_role("admin", "bd_manager")), db: Session = Depends(get_db)):
     """Queue an on-demand data refresh for a single scheme."""
     scheme = db.query(ExistingScheme).filter(ExistingScheme.id == scheme_id).first()
     if not scheme:
@@ -409,7 +416,7 @@ def trigger_scheme_refresh(scheme_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{scheme_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_scheme(scheme_id: int, db: Session = Depends(get_db)):
+def delete_scheme(scheme_id: int, current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     scheme = db.query(ExistingScheme).filter(ExistingScheme.id == scheme_id).first()
     if not scheme:
         raise HTTPException(status_code=404, detail="Scheme not found")

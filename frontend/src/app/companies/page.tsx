@@ -7,6 +7,7 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import SearchInput from '@/components/ui/SearchInput';
 import Modal from '@/components/ui/Modal';
+import PermissionGate from '@/components/rbac/PermissionGate';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
 
@@ -394,15 +395,17 @@ export default function CompaniesPage() {
                                             <p className="text-sm font-medium text-white">{dup.name}</p>
                                             <p className="text-xs text-slate-400 font-mono">CH# {dup.companies_house_number}</p>
                                             <p className="text-xs text-amber-400 mt-1">{dup.confidence}% confidence</p>
-                                            <button
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                setMergeModal({ primary: company, duplicate: dup });
-                                              }}
-                                              className="mt-2 px-3 py-1 text-xs font-medium text-white bg-amber-600 rounded hover:bg-amber-700 transition-colors"
-                                            >
-                                              Merge
-                                            </button>
+                                            <PermissionGate resource="companies" action="edit">
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setMergeModal({ primary: company, duplicate: dup });
+                                                }}
+                                                className="mt-2 px-3 py-1 text-xs font-medium text-white bg-amber-600 rounded hover:bg-amber-700 transition-colors"
+                                              >
+                                                Merge
+                                              </button>
+                                            </PermissionGate>
                                           </div>
                                         </div>
                                       </div>

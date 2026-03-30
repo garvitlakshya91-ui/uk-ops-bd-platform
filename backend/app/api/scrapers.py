@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.models import Council, ScraperRun
+from app.api.auth import require_role
+from app.models.user import User
 
 router = APIRouter(prefix="/api/scrapers", tags=["Scrapers"])
 
@@ -122,6 +124,7 @@ def list_councils(
     region: Optional[str] = None,
     portal_type: Optional[str] = None,
     search: Optional[str] = None,
+    current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
     query = db.query(Council)
@@ -142,7 +145,7 @@ def list_councils(
 
 
 @router.get("/councils/{council_id}", response_model=CouncilResponse)
-def get_council(council_id: int, db: Session = Depends(get_db)):
+def get_council(council_id: int, current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     council = db.query(Council).filter(Council.id == council_id).first()
     if not council:
         raise HTTPException(status_code=404, detail="Council not found")
@@ -150,7 +153,7 @@ def get_council(council_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/councils", response_model=CouncilResponse, status_code=status.HTTP_201_CREATED)
-def create_council(data: CouncilCreate, db: Session = Depends(get_db)):
+def create_council(data: CouncilCreate, current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     existing = db.query(Council).filter(Council.name == data.name).first()
     if existing:
         raise HTTPException(status_code=409, detail="Council with this name already exists")
@@ -166,6 +169,7 @@ def create_council(data: CouncilCreate, db: Session = Depends(get_db)):
 def update_council(
     council_id: int,
     data: CouncilUpdate,
+    current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
     council = db.query(Council).filter(Council.id == council_id).first()
@@ -182,7 +186,7 @@ def update_council(
 
 
 @router.delete("/councils/{council_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_council(council_id: int, db: Session = Depends(get_db)):
+def delete_council(council_id: int, current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     council = db.query(Council).filter(Council.id == council_id).first()
     if not council:
         raise HTTPException(status_code=404, detail="Council not found")
@@ -196,7 +200,7 @@ class SeedCouncilsResponse(BaseModel):
 
 
 @router.post("/seed-councils", response_model=SeedCouncilsResponse)
-def seed_councils(db: Session = Depends(get_db)):
+def seed_councils(current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     """Populate councils table from built-in scraper council lists."""
     from app.scrapers.orchestrator import ScraperOrchestrator
 
@@ -209,7 +213,7 @@ def seed_councils(db: Session = Depends(get_db)):
 
 
 @router.post("/trigger", response_model=TriggerScrapeResponse)
-def trigger_scrape(data: TriggerScrapeRequest, db: Session = Depends(get_db)):
+def trigger_scrape(data: TriggerScrapeRequest, current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     """Trigger a scraper run for a specific council via Celery."""
     council = db.query(Council).filter(Council.id == data.council_id).first()
     if not council:
@@ -256,7 +260,7 @@ class TriggerAllResponse(BaseModel):
 
 
 @router.post("/trigger-all", response_model=TriggerAllResponse)
-def trigger_all_scrapers(db: Session = Depends(get_db)):
+def trigger_all_scrapers(current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     """Trigger scrapers for all active councils via Celery."""
     from app.tasks.scraping_tasks import scrape_all_councils
 
@@ -274,7 +278,7 @@ def trigger_all_scrapers(db: Session = Depends(get_db)):
 
 
 @router.post("/scrape-direct/{council_id}")
-async def scrape_direct(council_id: int, db: Session = Depends(get_db)):
+async def scrape_direct(council_id: int, current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     """Run a scraper directly (async, no Celery) for testing."""
     from app.scrapers.orchestrator import ScraperOrchestrator
 
@@ -307,6 +311,7 @@ async def scrape_planning_api(
     limit: int = Query(500, ge=1, le=10000),
     days: int = Query(90, ge=1, le=365),
     start_offset: int = Query(0, ge=0),
+    current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
     """Run the Planning Data API scraper directly (bypasses Celery).
@@ -401,6 +406,7 @@ async def scrape_planning_api(
 @router.post("/scrape-brownfield")
 async def scrape_brownfield(
     min_dwellings: int = Query(5, ge=1),
+    current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
     """Scrape brownfield land register — nationwide development sites with addresses,
@@ -503,7 +509,7 @@ async def scrape_brownfield(
 
 
 @router.post("/scrape-tenders")
-async def scrape_tenders(db: Session = Depends(get_db)):
+async def scrape_tenders(current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     """Run Find a Tender scraper and ingest housing management contracts as schemes."""
     from app.scrapers.find_a_tender import FindATenderScraper
     from app.scrapers.scheme_ingest import ingest_tender_contracts
@@ -526,7 +532,7 @@ async def scrape_tenders(db: Session = Depends(get_db)):
 
 
 @router.post("/scrape-rsh")
-async def scrape_rsh(db: Session = Depends(get_db)):
+async def scrape_rsh(current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     """Run RSH scraper and ingest regulatory judgements for social housing providers."""
     from app.scrapers.rsh_scraper import RSHScraper
     from app.scrapers.scheme_ingest import ingest_rsh_judgements
@@ -549,7 +555,7 @@ async def scrape_rsh(db: Session = Depends(get_db)):
 
 
 @router.post("/enrich-epc")
-async def enrich_epc(db: Session = Depends(get_db)):
+async def enrich_epc(current_user: User = Depends(require_role("admin")), db: Session = Depends(get_db)):
     """Enrich existing schemes with EPC ratings for schemes that have postcodes."""
     from app.scrapers.scheme_ingest import enrich_schemes_with_epc
 
@@ -565,7 +571,7 @@ async def enrich_epc(db: Session = Depends(get_db)):
 
 
 @router.post("/trigger-enrichment")
-def trigger_enrichment():
+def trigger_enrichment(current_user: User = Depends(require_role("admin"))):
     """Trigger company matching and enrichment for unlinked applications."""
     from app.tasks.enrichment_tasks import enrich_new_applications
     result = enrich_new_applications.delay()
@@ -573,7 +579,7 @@ def trigger_enrichment():
 
 
 @router.post("/trigger-scoring")
-def trigger_scoring():
+def trigger_scoring(current_user: User = Depends(require_role("admin"))):
     """Trigger BD scoring recalculation and pipeline creation."""
     from app.tasks.scoring_tasks import recalculate_all_scores
     recalculate_all_scores.delay()
@@ -586,6 +592,7 @@ def list_scraper_runs(
     limit: int = Query(50, ge=1, le=500),
     council_id: Optional[int] = None,
     run_status: Optional[str] = None,
+    current_user: User = Depends(require_role("admin", "bd_manager")),
     db: Session = Depends(get_db),
 ):
     query = db.query(ScraperRun)
@@ -602,7 +609,7 @@ def list_scraper_runs(
 
 
 @router.get("/runs/{run_id}", response_model=ScraperRunResponse)
-def get_scraper_run(run_id: int, db: Session = Depends(get_db)):
+def get_scraper_run(run_id: int, current_user: User = Depends(require_role("admin", "bd_manager")), db: Session = Depends(get_db)):
     run = db.query(ScraperRun).filter(ScraperRun.id == run_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Scraper run not found")
@@ -610,7 +617,7 @@ def get_scraper_run(run_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/health", response_model=ScraperHealthResponse)
-def scraper_health(db: Session = Depends(get_db)):
+def scraper_health(current_user: User = Depends(require_role("admin", "bd_manager")), db: Session = Depends(get_db)):
     """Return health metrics for all scrapers."""
     now = datetime.datetime.now(datetime.timezone.utc)
     seven_days_ago = now - datetime.timedelta(days=7)
