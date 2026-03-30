@@ -18,8 +18,10 @@ import {
   XMarkIcon,
   BellIcon,
   PlusIcon,
+  ArrowRightOnRectangleIcon,
 } from '@heroicons/react/24/outline';
 import { cn } from '@/lib/utils';
+import { AuthProvider, useAuth } from '@/lib/auth';
 import './globals.css';
 
 const queryClient = new QueryClient({
@@ -43,6 +45,29 @@ const navItems = [
   { href: '/scraper-health', label: 'Scraper Health', icon: CpuChipIcon },
 ];
 
+const ROLE_LABELS: Record<string, string> = {
+  admin: 'Admin',
+  bd_manager: 'BD Manager',
+  bd_analyst: 'BD Analyst',
+  viewer: 'Viewer',
+};
+
+const ROLE_COLORS: Record<string, string> = {
+  admin: 'bg-red-500/20 text-red-400 border-red-500/30',
+  bd_manager: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+  bd_analyst: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+  viewer: 'bg-slate-500/20 text-slate-400 border-slate-500/30',
+};
+
+function getInitials(name: string): string {
+  return name
+    .split(' ')
+    .map((n) => n[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+}
+
 function getGreeting(): string {
   const hour = new Date().getHours();
   if (hour < 12) return 'Good morning';
@@ -57,6 +82,43 @@ function formatTopBarDate(): string {
     month: 'long',
     year: 'numeric',
   });
+}
+
+function SidebarUser() {
+  const { user, logout } = useAuth();
+
+  if (!user) return null;
+
+  const roleLabel = ROLE_LABELS[user.role] || user.role;
+  const roleColor = ROLE_COLORS[user.role] || ROLE_COLORS.viewer;
+
+  return (
+    <div className="px-4 py-4 border-t border-slate-800/80">
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-lg shadow-blue-500/20">
+          {getInitials(user.name)}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-white truncate">{user.name}</p>
+          <span
+            className={cn(
+              'inline-block mt-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded border',
+              roleColor
+            )}
+          >
+            {roleLabel}
+          </span>
+        </div>
+        <button
+          onClick={logout}
+          title="Sign out"
+          className="p-1.5 text-slate-500 hover:text-red-400 rounded-lg hover:bg-slate-800 transition-colors"
+        >
+          <ArrowRightOnRectangleIcon className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function Sidebar({ mobile, onClose }: { mobile?: boolean; onClose?: () => void }) {
@@ -139,22 +201,15 @@ function Sidebar({ mobile, onClose }: { mobile?: boolean; onClose?: () => void }
       </div>
 
       {/* User */}
-      <div className="px-4 py-4 border-t border-slate-800/80">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-lg shadow-blue-500/20">
-            JR
-          </div>
-          <div>
-            <p className="text-sm font-medium text-white">James Richardson</p>
-            <p className="text-xs text-slate-500">BD Manager</p>
-          </div>
-        </div>
-      </div>
+      <SidebarUser />
     </div>
   );
 }
 
 function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
+  const { user } = useAuth();
+  const firstName = user?.name?.split(' ')[0] || '';
+
   return (
     <div className="h-14 bg-slate-900/95 backdrop-blur-sm border-b border-slate-800/80 flex items-center justify-between px-4 lg:px-6">
       <div className="flex items-center gap-4">
@@ -166,7 +221,7 @@ function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
         </button>
         <div className="hidden sm:block">
           <p className="text-sm font-medium text-white">
-            {getGreeting()}, <span className="text-blue-400">James</span>
+            {getGreeting()}, <span className="text-blue-400">{firstName}</span>
           </p>
           <p className="text-[11px] text-slate-500">{formatTopBarDate()}</p>
         </div>
@@ -204,31 +259,73 @@ function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
   );
 }
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+const PUBLIC_PATHS = ['/login', '/register'];
 
+function AuthenticatedShell({ children }: { children: React.ReactNode }) {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { user, loading } = useAuth();
+  const pathname = usePathname();
+
+  // On public pages, render children directly (login/register handle their own layout)
+  if (PUBLIC_PATHS.includes(pathname)) {
+    return <>{children}</>;
+  }
+
+  // Show loading spinner while checking auth
+  if (loading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-900">
+        <div className="flex flex-col items-center gap-3">
+          <svg
+            className="animate-spin h-8 w-8 text-blue-500"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <p className="text-sm text-slate-500">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // If not authenticated, AuthProvider will redirect; render nothing while that happens
+  if (!user) {
+    return null;
+  }
+
+  return (
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar />
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 z-40 lg:hidden">
+          <div
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setMobileMenuOpen(false)}
+          />
+          <div className="relative z-50">
+            <Sidebar mobile onClose={() => setMobileMenuOpen(false)} />
+          </div>
+        </div>
+      )}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <TopBar onMenuClick={() => setMobileMenuOpen(true)} />
+        <main className="flex-1 overflow-y-auto p-4 lg:p-6">{children}</main>
+      </div>
+    </div>
+  );
+}
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark">
       <body className="bg-slate-900">
         <QueryClientProvider client={queryClient}>
-          <div className="flex h-screen overflow-hidden">
-            <Sidebar />
-            {mobileMenuOpen && (
-              <div className="fixed inset-0 z-40 lg:hidden">
-                <div
-                  className="fixed inset-0 bg-black/60 backdrop-blur-sm"
-                  onClick={() => setMobileMenuOpen(false)}
-                />
-                <div className="relative z-50">
-                  <Sidebar mobile onClose={() => setMobileMenuOpen(false)} />
-                </div>
-              </div>
-            )}
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <TopBar onMenuClick={() => setMobileMenuOpen(true)} />
-              <main className="flex-1 overflow-y-auto p-4 lg:p-6">{children}</main>
-            </div>
-          </div>
+          <AuthProvider>
+            <AuthenticatedShell>{children}</AuthenticatedShell>
+          </AuthProvider>
           <Toaster
             position="top-right"
             toastOptions={{

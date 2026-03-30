@@ -161,7 +161,22 @@
       "Bash(curl -s http://localhost:8000/api/v2/schemes/271/contracts)",
       "Bash(echo \"exit: $?\")",
       "Bash(git check-ignore:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git branch:*)",
+      "Bash(git remote:*)",
+      "Bash(git push:*)",
+      "Bash(ls C:/Users/garvi/uk-ops-bd-platform/backend/*.zip)",
+      "Bash(ls C:/Users/garvi/uk-ops-bd-platform/backend/*.csv)",
+      "Bash(find /c/Users/garvi/uk-ops-bd-platform -type f -name *auth* -o -name *middleware* -o -name *jwt*)",
+      "Bash(grep -r \"auth_token\\\\|localStorage\\\\|Authorization\" /c/Users/garvi/uk-ops-bd-platform/frontend/src --include=*.ts --include=*.tsx)",
+      "Bash(grep -r \"def login\\\\|def register\\\\|def auth\\\\|@router.post\" /c/Users/garvi/uk-ops-bd-platform/backend/app/api --include=*.py)",
+      "Bash(curl -s -X POST http://localhost:8000/api/auth/register -H \"Content-Type: application/json\" -d '{\"\"email\"\":\"\"admin@test.com\"\",\"\"password\"\":\"\"admin123\"\",\"\"name\"\":\"\"Admin User\"\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/api/auth/register -H \"Content-Type: application/json\" -d '{\"\"\"\"email\"\"\"\":\"\"\"\"admin@test.com\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"admin123\"\"\"\",\"\"\"\"name\"\"\"\":\"\"\"\"Admin User\"\"\"\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/api/auth/register -H 'Content-Type: application/json' -d '{\"\"\"\"email\"\"\"\":\"\"\"\"admin@test.com\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"admin123\"\"\"\",\"\"\"\"name\"\"\"\":\"\"\"\"Admin User\"\"\"\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/api/auth/login -H \"Content-Type: application/json\" -d '{\"\"\"\"email\"\"\"\":\"\"\"\"admin@test.com\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"admin123\"\"\"\"}')",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwidHlwZSI6ImFjY2VzcyIsImV4cCI6MTc3NDkyOTA3M30.fJhQunt8GMkmNYZR2OyWrgZed56w41sllFghy1aL2_Y\")",
+      "Bash(curl -s http://localhost:8000/api/auth/me -H \"Authorization: Bearer $TOKEN\")"
     ]
   }
 }

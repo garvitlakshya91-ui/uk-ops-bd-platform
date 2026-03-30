@@ -143,6 +143,11 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=0, day_of_month="1", month_of_year="4"),
         "options": {"queue": "scraping"},
     },
+    "enrich-companies-charity-weekly": {
+        "task": "app.tasks.enrichment_tasks.enrich_companies_charity_status",
+        "schedule": crontab(hour=6, minute=0, day_of_week="saturday"),
+        "options": {"queue": "enrichment"},
+    },
 }
 
 celery_app.autodiscover_tasks([

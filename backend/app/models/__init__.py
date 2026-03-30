@@ -11,6 +11,7 @@ from app.models.models import (
     ScraperRun,
     Alert,
 )
+from app.models.user import User
 
 __all__ = [
     "Council",
@@ -24,4 +25,5 @@ __all__ = [
     "PipelineOpportunity",
     "ScraperRun",
     "Alert",
+    "User",
 ]

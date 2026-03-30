@@ -96,6 +96,10 @@ def enrich_company(self, company_id: int) -> dict[str, Any]:
                     db.commit()
                     result["companies_house"] = "enriched"
                     log.info("companies_house_enriched", ch_number=company.companies_house_number)
+
+                    # Auto-dispatch PSC chain resolution now that we have a CH number
+                    enrich_company_psc.delay(company_id)
+                    result["psc_dispatched"] = True
                 else:
                     result["companies_house"] = "no_match"
             except Exception as exc:
@@ -345,6 +349,24 @@ def enrich_company_psc(self, company_id: int) -> dict[str, Any]:
                 )
 
             child = parent  # Move up the chain.
+
+        # Update any schemes where this company is operator but has no owner
+        # Set the ultimate parent as the owner
+        from app.models.models import ExistingScheme
+        if chain:
+            ultimate_parent_id = child.id  # child is now the top of the chain
+            schemes_to_update = (
+                db.query(ExistingScheme)
+                .filter(
+                    ExistingScheme.operator_company_id == company_id,
+                    ExistingScheme.owner_company_id.is_(None),
+                )
+                .all()
+            )
+            for scheme in schemes_to_update:
+                scheme.owner_company_id = ultimate_parent_id
+                parents_linked += 1
+            db.commit()
 
         result = {
             "company_id": company_id,
@@ -956,6 +978,90 @@ def backfill_contract_dates() -> dict[str, Any]:
         }
         logger.info("backfill_contract_dates_completed", **result)
         return result
+
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    name="app.tasks.enrichment_tasks.enrich_companies_charity_status",
+    acks_late=True,
+)
+def enrich_companies_charity_status() -> dict[str, Any]:
+    """Cross-reference RP companies against the Charity Commission register.
+
+    For each Company with company_type='RP' that hasn't been checked,
+    verify if it's a registered charity and store the charity number.
+
+    Designed to run weekly via Celery Beat.
+    """
+    db = _get_db()
+    try:
+        from app.models.models import Company
+        from app.scrapers.charity_commission import CharityCommissionClient
+
+        # Find RP companies without charity info
+        candidates = (
+            db.query(Company)
+            .filter(
+                Company.company_type.in_(["RP", "LRP"]),
+                Company.is_active.is_(True),
+            )
+            .order_by(Company.updated_at.asc())
+            .limit(50)
+            .all()
+        )
+
+        if not candidates:
+            logger.info("enrich_charity_status_none_found")
+            return {"checked": 0, "charities_found": 0}
+
+        client = CharityCommissionClient()
+        charities_found = 0
+        errors = 0
+
+        for company in candidates:
+            try:
+                # Skip if already has charity info
+                sic = company.sic_codes or {}
+                if isinstance(sic, dict) and sic.get("charity_number"):
+                    continue
+
+                result = _run_async(client.is_registered_charity(company.name))
+
+                if result:
+                    existing_sic = dict(company.sic_codes or {})
+                    existing_sic["charity_number"] = result.get("charity_number", "")
+                    existing_sic["charity_income"] = result.get("income")
+                    existing_sic["charity_trustees"] = result.get("trustees", [])[:5]
+                    company.sic_codes = existing_sic
+                    db.commit()
+                    charities_found += 1
+                    logger.info(
+                        "charity_status_found",
+                        company_id=company.id,
+                        company_name=company.name,
+                        charity_number=result.get("charity_number"),
+                    )
+
+            except Exception as exc:
+                logger.warning(
+                    "charity_enrichment_failed",
+                    company_id=company.id,
+                    error=str(exc),
+                )
+                errors += 1
+                db.rollback()
+
+        _run_async(client.close())
+
+        result_summary = {
+            "checked": len(candidates),
+            "charities_found": charities_found,
+            "errors": errors,
+        }
+        logger.info("enrich_charity_status_completed", **result_summary)
+        return result_summary
 
     finally:
         db.close()

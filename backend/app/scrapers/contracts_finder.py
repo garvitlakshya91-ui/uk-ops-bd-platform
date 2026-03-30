@@ -49,16 +49,30 @@ HOUSING_KEYWORDS: list[str] = [
     "housing association", "accommodation", "homelessness",
     "repairs and maintenance", "voids", "care home", "extra care",
     "retirement", "supported housing", "temporary accommodation",
+    # PBSA
+    "student accommodation", "student housing", "purpose built student",
+    "pbsa", "university accommodation", "halls of residence",
+    "student residence", "student living",
+    # BTR
+    "build to rent", "btr", "private rented sector", "prs",
+    "multifamily", "multi-family", "managed rental", "rental management",
+    # Co-living
+    "co-living", "co living", "coliving", "shared living", "managed living",
+    # Wider
+    "key worker", "later living", "senior living", "retirement living",
+    "assisted living", "block management", "residential management",
+    "concierge", "hostel", "refuge",
 ]
 
 HOUSING_CPV_CODES: set[str] = {
     "70330000", "70332000", "70333000", "79993000", "98341000",
     "50700000", "45211000", "45211341", "45211340",
+    "55100000", "55250000", "55200000",
 }
 
-# Search terms used to query the API -- broad enough to capture relevant
-# housing/FM contracts while keeping the result set manageable.
+# Search terms used to query the API -- covers housing, PBSA, BTR, co-living
 SEARCH_TERMS: list[str] = [
+    # Core housing
     "housing management",
     "property management",
     "facilities management housing",
@@ -69,10 +83,35 @@ SEARCH_TERMS: list[str] = [
     "sheltered housing",
     "supported housing",
     "housing association",
+    # PBSA
+    "student accommodation",
+    "student housing",
+    "purpose built student accommodation",
+    "university accommodation",
+    "halls of residence",
+    # BTR
+    "build to rent",
+    "private rented sector",
+    "residential lettings management",
+    "managed rental",
+    # Co-living
+    "co-living",
+    "shared living accommodation",
+    # Wider residential
+    "key worker housing",
+    "later living",
+    "senior living",
+    "retirement housing",
+    "care home management",
+    "temporary accommodation",
+    "hostel management",
+    "block management",
+    "residential management services",
+    "concierge services residential",
 ]
 
 # Maximum pages to fetch per search term (100 results per page)
-DEFAULT_MAX_PAGES: int = 10
+DEFAULT_MAX_PAGES: int = 50
 DEFAULT_PAGE_SIZE: int = 100
 
 
@@ -141,7 +180,7 @@ class ContractsFinderScraper(BaseScraper):
         if search_terms is None:
             search_terms = SEARCH_TERMS
         if published_from is None:
-            published_from = date.today() - timedelta(days=180)
+            published_from = date.today() - timedelta(days=1825)  # 5 years
         if published_to is None:
             published_to = date.today()
 
@@ -278,8 +317,9 @@ class ContractsFinderScraper(BaseScraper):
         Determine whether an OCDS release is related to housing or
         property management.
 
-        Checks CPV classification codes first (fast, precise), then
-        falls back to keyword matching on title and description text.
+        Since results already come from keyword-targeted API searches,
+        we use a broad filter: CPV codes, title/description keywords,
+        or buyer name containing housing-related terms.
 
         Args:
             release: A single OCDS release dict.
@@ -295,14 +335,14 @@ class ContractsFinderScraper(BaseScraper):
             cpv_id = classification.get("id", "")
             if cpv_id in HOUSING_CPV_CODES:
                 return True
-            # Also check the broader prefix (first 5 digits)
             if cpv_id and cpv_id[:5] in {c[:5] for c in HOUSING_CPV_CODES}:
                 return True
 
-        # Fall back to keyword matching on title + description
+        # Check title + description + buyer name
         title = tender.get("title", "")
         description = tender.get("description", "")
-        text = f"{title} {description}".lower()
+        buyer_name = release.get("buyer", {}).get("name", "")
+        text = f"{title} {description} {buyer_name}".lower()
 
         return any(kw in text for kw in HOUSING_KEYWORDS)
 

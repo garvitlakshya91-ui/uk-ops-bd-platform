@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     # Sentry
     SENTRY_DSN: str = ""
 
+    # JWT / Auth
+    JWT_SECRET_KEY: str = "change-me-in-production-use-openssl-rand-hex-32"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 hours
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3010", "http://localhost:5173"]
 

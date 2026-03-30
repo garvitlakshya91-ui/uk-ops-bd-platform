@@ -26,8 +26,61 @@ from sqlalchemy.orm import Session
 
 from app.models.models import Company, ExistingScheme, SchemeChangeLog, SchemeContract
 from app.scrapers.base import BaseScraper
+from app.scrapers.date_extractor import extract_contract_dates
 
 logger = structlog.get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Operator extraction from description text
+# ---------------------------------------------------------------------------
+
+# Patterns that commonly introduce operator/supplier names in tender descriptions
+_OPERATOR_PATTERNS = [
+    # "awarded to <company>"
+    re.compile(r"(?:awarded|appointed|selected|contracted)\s+to\s+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing))", re.IGNORECASE),
+    # "contract with <company>"
+    re.compile(r"(?:contract|agreement|arrangement)\s+with\s+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing))", re.IGNORECASE),
+    # "managed by <company>"
+    re.compile(r"(?:managed|operated|delivered|provided|run)\s+by\s+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing))", re.IGNORECASE),
+    # "the provider is <company>" / "the operator is <company>"
+    re.compile(r"(?:provider|operator|supplier|contractor|manager)\s+(?:is|will be|shall be)\s+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing))", re.IGNORECASE),
+    # "incumbent: <company>" or "current provider: <company>"
+    re.compile(r"(?:incumbent|current\s+(?:provider|operator|contractor|supplier))[\s:]+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing))", re.IGNORECASE),
+]
+
+
+def _extract_operator_from_text(text: str) -> str:
+    """Try to extract an operator/supplier company name from description text."""
+    if not text:
+        return ""
+    for pattern in _OPERATOR_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            name = match.group(1).strip().rstrip(".,")
+            if _is_valid_company_name(name) and len(name) >= 5:
+                return name
+    return ""
+
+
+_ASSET_MANAGER_PATTERNS = [
+    re.compile(r"asset\s+manag(?:er|ement)\s+(?:is|by|provided by|:)\s+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Housing|Capital|Partners|Advisors))", re.IGNORECASE),
+    re.compile(r"(?:asset\s+manager|AM\s+provider|asset\s+management\s+(?:company|provider|firm))[\s:]+([A-Z][A-Za-z\s&'.,\-]+(?:Ltd|Limited|Plc|PLC|LLP|Group|Services|Management|Capital|Partners|Advisors))", re.IGNORECASE),
+    re.compile(r"(?:managed|overseen)\s+(?:by|through)\s+([A-Z][A-Za-z\s&'.,\-]+(?:Capital|Partners|Advisors|Asset|Management|Investment))", re.IGNORECASE),
+]
+
+
+def _extract_asset_manager_from_text(text: str) -> str:
+    """Try to extract an asset manager company name from description text."""
+    if not text:
+        return ""
+    for pattern in _ASSET_MANAGER_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            name = match.group(1).strip().rstrip(".,")
+            if _is_valid_company_name(name) and len(name) >= 5:
+                return name
+    return ""
 
 
 def _json_safe(obj: Any) -> Any:
@@ -65,6 +118,9 @@ CPV_SCHEME_TYPE_MAP: dict[str, str] = {
     "45300000": "Housing Maintenance",
     "45330000": "Housing Maintenance",
     "45421000": "Housing Maintenance",
+    "55100000": "BTR",
+    "55250000": "BTR",
+    "55200000": "Co-living",
 }
 
 # Viability rating -> financial health score
@@ -229,6 +285,7 @@ HOUSING_KEYWORDS = [
 HOUSING_CPV_CODES = {
     "70330000", "70332000", "70333000", "79993000", "98341000",
     "50700000", "45211000", "45211341", "45211340",
+    "55100000", "55250000", "55200000",
 }
 
 # CPV prefixes (first 3-5 digits) that indicate housing-related contracts
@@ -586,6 +643,7 @@ def _update_scheme_fields(
     *,
     operator: Company | None,
     owner: Company | None,
+    asset_manager: Company | None = None,
     address: str | None = None,
     postcode: str | None,
     scheme_type: str,
@@ -603,6 +661,10 @@ def _update_scheme_fields(
     if owner and not scheme.owner_company_id:
         _log_scheme_change(scheme, "owner_company_id", scheme.owner_company_id, owner.id, source, db)
         scheme.owner_company_id = owner.id
+
+    if asset_manager and not scheme.asset_manager_company_id:
+        _log_scheme_change(scheme, "asset_manager_company_id", scheme.asset_manager_company_id, asset_manager.id, source, db)
+        scheme.asset_manager_company_id = asset_manager.id
 
     if address and (not scheme.address or scheme.address == scheme.name):
         _log_scheme_change(scheme, "address", scheme.address, address, source, db)
@@ -672,18 +734,42 @@ def ingest_tender_contracts(
     contracts_created = 0
 
     for raw in results:
+        # --- Extract dates from description if OCDS dates missing ---
+        start_date = raw.get("start_date")
+        end_date = raw.get("end_date")
+        description = raw.get("description", "")
+
+        if (not start_date or not end_date) and description:
+            extracted = extract_contract_dates(description)
+            if not start_date and extracted.get("start_date"):
+                start_date = extracted["start_date"]
+            if not end_date and extracted.get("end_date"):
+                end_date = extracted["end_date"]
+
+        # --- Extract operator from description if supplier missing ---
+        supplier = raw.get("supplier", "")
+        if not supplier and description:
+            supplier = _extract_operator_from_text(description)
+        if not supplier:
+            supplier = _extract_operator_from_text(raw.get("title", ""))
+
+        # --- Extract asset manager from description ---
+        asset_manager_name = _extract_asset_manager_from_text(description)
+        if not asset_manager_name:
+            asset_manager_name = _extract_asset_manager_from_text(raw.get("title", ""))
+
         # --- Validate ---
         try:
             contract_data = ScrapedContractData(
                 title=raw.get("title", "").strip(),
                 notice_id=raw.get("notice_id"),
                 contracting_authority=raw.get("contracting_authority", ""),
-                supplier=raw.get("supplier", ""),
+                supplier=supplier,
                 contract_value=raw.get("contract_value"),
-                start_date=raw.get("start_date"),
-                end_date=raw.get("end_date"),
+                start_date=start_date,
+                end_date=end_date,
                 cpv_codes=raw.get("cpv_codes", []),
-                description=raw.get("description", ""),
+                description=description,
                 source="find_a_tender",
                 source_reference=raw.get("notice_id"),
             )
@@ -726,12 +812,18 @@ def ingest_tender_contracts(
             if contract_data.contracting_authority
             else None
         )
+        asset_manager = (
+            _find_or_create_company(asset_manager_name, db, "Asset Manager")
+            if asset_manager_name
+            else None
+        )
 
         if existing:
             _update_scheme_fields(
                 existing,
                 operator=operator,
                 owner=owner,
+                asset_manager=asset_manager,
                 address=address,
                 postcode=postcode,
                 scheme_type=scheme_type,
@@ -751,6 +843,7 @@ def ingest_tender_contracts(
                 scheme_type=scheme_type,
                 operator_company_id=operator.id if operator else None,
                 owner_company_id=owner.id if owner else None,
+                asset_manager_company_id=asset_manager.id if asset_manager else None,
                 contract_start_date=contract_data.start_date,
                 contract_end_date=contract_data.end_date,
                 source="find_a_tender",
@@ -839,6 +932,25 @@ def ingest_contracts_finder(
         cpv_codes = raw.get("cpv_codes", [])
         description = raw.get("description", "")
 
+        # --- Extract dates from description if OCDS dates missing ---
+        if (not start_date or not end_date) and description:
+            extracted = extract_contract_dates(description)
+            if not start_date and extracted.get("start_date"):
+                start_date = extracted["start_date"]
+            if not end_date and extracted.get("end_date"):
+                end_date = extracted["end_date"]
+
+        # --- Extract operator from description if supplier missing ---
+        if not supplier and description:
+            supplier = _extract_operator_from_text(description)
+        if not supplier:
+            supplier = _extract_operator_from_text(title)
+
+        # --- Extract asset manager from description ---
+        asset_manager_name = _extract_asset_manager_from_text(description)
+        if not asset_manager_name:
+            asset_manager_name = _extract_asset_manager_from_text(title)
+
         # --- Validate ---
         try:
             contract_data = ScrapedContractData(
@@ -893,12 +1005,18 @@ def ingest_contracts_finder(
             if contract_data.contracting_authority
             else None
         )
+        asset_manager = (
+            _find_or_create_company(asset_manager_name, db, "Asset Manager")
+            if asset_manager_name
+            else None
+        )
 
         if existing:
             _update_scheme_fields(
                 existing,
                 operator=operator,
                 owner=owner,
+                asset_manager=asset_manager,
                 address=address,
                 postcode=postcode,
                 scheme_type=scheme_type,
@@ -918,6 +1036,7 @@ def ingest_contracts_finder(
                 scheme_type=scheme_type,
                 operator_company_id=operator.id if operator else None,
                 owner_company_id=owner.id if owner else None,
+                asset_manager_company_id=asset_manager.id if asset_manager else None,
                 contract_start_date=contract_data.start_date,
                 contract_end_date=contract_data.end_date,
                 source="contracts_finder",

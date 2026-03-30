@@ -42,6 +42,7 @@ CPV codes of interest:
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -68,10 +69,17 @@ HOUSING_CPV_CODES: set[str] = {
     "98341000",  # Accommodation services
     "85311000",  # Social welfare services with accommodation
     "85320000",  # Social services without accommodation
+    "55100000",  # Hotel/accommodation operation services
+    "55250000",  # Letting of furnished accommodation (co-living/BTR)
+    "55200000",  # Camping sites and other non-hotel accommodation
+    "45211000",  # Construction of multi-dwelling buildings
+    "45211341",  # Flats construction
+    "45211340",  # Multi-dwelling building construction
 }
 
 # Keywords used for client-side title/description filtering (if no CPV match)
 _HOUSING_KEYWORDS = [
+    # Core housing
     "housing management",
     "property management",
     "social housing",
@@ -86,6 +94,49 @@ _HOUSING_KEYWORDS = [
     "facilities management",
     "leasehold management",
     "void management",
+    # PBSA
+    "student accommodation",
+    "student housing",
+    "purpose built student",
+    "pbsa",
+    "university accommodation",
+    "halls of residence",
+    "student residence",
+    "student living",
+    # BTR
+    "build to rent",
+    "btr",
+    "private rented sector",
+    "prs",
+    "rental management",
+    "multifamily",
+    "multi-family",
+    "managed rental",
+    "residential lettings",
+    "rented residential",
+    # Co-living
+    "co-living",
+    "co living",
+    "coliving",
+    "shared living",
+    "managed living",
+    # Wider residential
+    "key worker",
+    "keyworker",
+    "later living",
+    "senior living",
+    "retirement living",
+    "care home",
+    "assisted living",
+    "temporary accommodation",
+    "hostel",
+    "refuge",
+    "concierge",
+    "block management",
+    "residential management",
+    "housing contract",
+    "housing stock",
+    "council housing",
 ]
 
 # Stages to fetch — award has supplier info; valid values: planning, tender, award
@@ -140,7 +191,7 @@ class FindATenderScraper(BaseScraper):
         filters client-side for our CPV codes and housing keywords.
         """
         if published_from is None:
-            published_from = date.today() - timedelta(days=180)
+            published_from = date.today() - timedelta(days=1825)  # 5 years
         if published_to is None:
             published_to = date.today()
 
@@ -164,12 +215,29 @@ class FindATenderScraper(BaseScraper):
         }
         next_url: str | None = OCDS_API_URL
 
+        consecutive_errors = 0
         while next_url and pages < max_pages:
-            if pages == 0:
-                resp = await self.fetch(next_url, params=params, use_cache=False)
-            else:
-                # Follow the cursor URL directly (contains all params + cursor)
-                resp = await self.fetch(next_url, use_cache=False)
+            try:
+                if pages == 0:
+                    resp = await self.fetch(next_url, params=params, use_cache=False)
+                else:
+                    resp = await self.fetch(next_url, use_cache=False)
+            except Exception as fetch_exc:
+                consecutive_errors += 1
+                self.log.warning(
+                    "fat_ocds_fetch_error",
+                    page=pages,
+                    error=str(fetch_exc)[:200],
+                    consecutive_errors=consecutive_errors,
+                )
+                if consecutive_errors >= 3:
+                    self.log.warning("fat_ocds_stopping_after_errors", matched=len(all_results))
+                    break
+                # Wait and retry with same URL
+                await asyncio.sleep(30)
+                continue
+
+            consecutive_errors = 0
 
             try:
                 data = resp.json()
