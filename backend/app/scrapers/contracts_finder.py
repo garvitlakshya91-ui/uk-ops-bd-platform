@@ -241,7 +241,11 @@ class ContractsFinderScraper(BaseScraper):
     ) -> list[dict[str, Any]]:
         """
         Paginate through Contracts Finder API results for a single
-        search term.
+        search term using cursor-based pagination.
+
+        The CF OCDS API ignores the ``page`` parameter and uses
+        cursor-based pagination via ``links.next``.  Each response
+        contains up to 100 releases regardless of the ``size`` parameter.
 
         Args:
             term: Keyword to search for.
@@ -249,29 +253,38 @@ class ContractsFinderScraper(BaseScraper):
             published_to: End of publication date range.
             stages: OCDS stages filter (e.g. "tender,award").
             max_pages: Maximum number of pages to retrieve.
-            page_size: Number of results per page.
+            page_size: Number of results per page (API always returns 100).
 
         Returns:
             List of OCDS release dicts from all pages.
         """
         releases: list[dict[str, Any]] = []
 
-        for page in range(1, max_pages + 1):
-            params: dict[str, Any] = {
-                "keyword": term,
-                "publishedFrom": published_from.strftime("%Y-%m-%d"),
-                "publishedTo": published_to.strftime("%Y-%m-%d"),
-                "stages": stages,
-                "size": min(page_size, 100),
-                "page": page,
-            }
+        # First request uses query parameters
+        params: dict[str, Any] = {
+            "keyword": term,
+            "publishedFrom": published_from.strftime("%Y-%m-%d"),
+            "publishedTo": published_to.strftime("%Y-%m-%d"),
+            "stages": stages,
+            "size": min(page_size, 100),
+        }
+        next_url: str | None = API_BASE_URL
+        use_params = True
 
+        for page in range(1, max_pages + 1):
             try:
-                resp = await self.fetch(
-                    API_BASE_URL,
-                    params=params,
-                    use_cache=False,
-                )
+                if use_params:
+                    resp = await self.fetch(
+                        next_url,
+                        params=params,
+                        use_cache=False,
+                    )
+                else:
+                    # Subsequent pages: follow cursor URL directly
+                    resp = await self.fetch(
+                        next_url,
+                        use_cache=False,
+                    )
                 data = resp.json()
             except Exception as exc:
                 self.log.warning(
@@ -300,10 +313,11 @@ class ContractsFinderScraper(BaseScraper):
                 cumulative=len(releases),
             )
 
-            # If we received fewer results than requested, we are on the
-            # last page -- no need to request more.
-            if len(page_releases) < page_size:
+            # Follow cursor-based pagination via links.next
+            next_url = (data.get("links") or {}).get("next")
+            if not next_url:
                 break
+            use_params = False
 
         return releases
 

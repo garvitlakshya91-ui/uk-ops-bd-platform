@@ -38,15 +38,12 @@ class NECCouncilConfig:
 
 
 NEC_COUNCILS: list[NECCouncilConfig] = [
+    # --- Genuine Northgate / PlanningExplorer portals ---
     NECCouncilConfig(
-        name="Croydon",
-        council_id=200,
-        base_url="https://publicaccess3.croydon.gov.uk",
-    ),
-    NECCouncilConfig(
-        name="Bromley",
-        council_id=201,
-        base_url="https://searchapplications.bromley.gov.uk",
+        name="Birmingham",
+        council_id=1,
+        base_url="https://eplanning.birmingham.gov.uk",
+        search_path="/Northgate/PlanningExplorer/GeneralSearch.aspx",
     ),
     NECCouncilConfig(
         name="Wandsworth",
@@ -55,27 +52,31 @@ NEC_COUNCILS: list[NECCouncilConfig] = [
         search_path="/Northgate/PlanningExplorer/GeneralSearch.aspx",
     ),
     NECCouncilConfig(
-        name="Richmond upon Thames",
-        council_id=203,
-        base_url="https://www2.richmond.gov.uk",
-        search_path="/Northgate/PlanningExplorer/GeneralSearch.aspx",
+        name="Merton",
+        council_id=45,
+        base_url="https://planning.merton.gov.uk",
+        search_path="/Northgate/PlanningExplorerAA/GeneralSearch.aspx",
     ),
     NECCouncilConfig(
-        name="Lewisham",
-        council_id=204,
-        base_url="https://planning.lewisham.gov.uk",
-        search_path="/online-applications/search.do?action=advanced",
+        name="Liverpool",
+        council_id=7,
+        base_url="http://northgate.liverpool.gov.uk",
+        search_path="/PlanningExplorer/generalsearch.aspx",
     ),
+    # Reading uses FastWeb (NEC variant) — path is /fastweb_PL/
     NECCouncilConfig(
-        name="Greenwich",
-        council_id=205,
-        base_url="https://planning.royalgreenwich.gov.uk",
+        name="Reading",
+        council_id=20,
+        base_url="https://planning.reading.gov.uk",
+        search_path="/fastweb_PL/search.asp",
     ),
-    NECCouncilConfig(
-        name="Waltham Forest",
-        council_id=206,
-        base_url="https://planning.walthamforest.gov.uk",
-    ),
+    # Reclassified out of NEC:
+    # Croydon → Idox (publicaccess3.croydon.gov.uk/online-applications)
+    # Bromley → Idox (searchapplications.bromley.gov.uk/online-applications)
+    # Greenwich → Idox (planning.royalgreenwich.gov.uk/online-applications)
+    # Lewisham → Idox (planning.lewisham.gov.uk/online-applications)
+    # Richmond upon Thames → API (custom ASP.NET portal, not NEC)
+    # Waltham Forest → API (old NEC portal is dead)
 ]
 
 SEARCH_KEYWORDS: list[str] = [
@@ -138,6 +139,60 @@ class NECScraper(BaseScraper):
         if ev and isinstance(ev, Tag):
             self._event_validation = str(ev.get("value", ""))
 
+    def _detect_form_fields(self, html: str) -> dict[str, str]:
+        """Auto-detect form field names from the search page HTML.
+
+        NEC/Northgate portals use two naming conventions:
+        1. ASP.NET style: ``ctl00$MainBodyContent$txtProposal``
+        2. Simple style: ``txtProposal`` (used by older Northgate/PlanningExplorer)
+
+        This method inspects the actual form to find the correct names.
+        """
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Map of logical field -> list of possible names (ordered by preference)
+        candidates = {
+            "proposal": [
+                "ctl00$MainBodyContent$txtProposal",
+                "txtProposal",
+            ],
+            "date_from": [
+                "ctl00$MainBodyContent$txtDateReceivedFrom",
+                "dateStart",
+                "ctl00$MainBodyContent$dateStart",
+            ],
+            "date_to": [
+                "ctl00$MainBodyContent$txtDateReceivedTo",
+                "dateEnd",
+                "ctl00$MainBodyContent$dateEnd",
+            ],
+            "search_btn": [
+                "ctl00$MainBodyContent$btnSearch",
+                "csbtnSearch",
+                "ctl00$MainBodyContent$csbtnSearch",
+            ],
+        }
+
+        detected: dict[str, str] = {}
+        for logical_name, possible_names in candidates.items():
+            for name in possible_names:
+                el = soup.find("input", {"name": name})
+                if not el:
+                    el = soup.find("select", {"name": name})
+                if el:
+                    detected[logical_name] = name
+                    break
+            else:
+                # Use the first candidate as fallback
+                detected[logical_name] = possible_names[0]
+
+        self.log.debug(
+            "nec_form_fields_detected",
+            fields=detected,
+            council=self.council_name,
+        )
+        return detected
+
     def _build_url(self, path: str) -> str:
         return f"{self.config.base_url.rstrip('/')}{path}"
 
@@ -164,10 +219,11 @@ class NECScraper(BaseScraper):
         all_results: list[dict[str, Any]] = []
         seen_refs: set[str] = set()
 
-        # Load search page to get initial ASP.NET state
+        # Load search page to get initial ASP.NET state and detect form fields
         search_url = self._build_url(self.config.search_path)
         init_resp = await self.fetch(search_url, use_cache=False)
         self._extract_aspnet_state(init_resp.text)
+        self._form_fields = self._detect_form_fields(init_resp.text)
 
         for keyword in keywords:
             self.log.info(
@@ -205,28 +261,85 @@ class NECScraper(BaseScraper):
         results: list[dict[str, Any]] = []
         search_url = self._build_url(self.config.search_path)
 
-        # NEC forms typically use these control names
+        # Use auto-detected form field names (handles both ASP.NET and
+        # plain Northgate naming conventions)
+        fields = getattr(self, "_form_fields", {})
         form_data: dict[str, str] = {
             "__VIEWSTATE": self._viewstate,
             "__VIEWSTATEGENERATOR": self._viewstate_generator,
             "__EVENTVALIDATION": self._event_validation,
-            "ctl00$MainBodyContent$txtProposal": keyword,
-            "ctl00$MainBodyContent$txtDateReceivedFrom": date_from.strftime("%d/%m/%Y"),
-            "ctl00$MainBodyContent$txtDateReceivedTo": date_to.strftime("%d/%m/%Y"),
-            "ctl00$MainBodyContent$btnSearch": "Search",
+            fields.get("proposal", "ctl00$MainBodyContent$txtProposal"): keyword,
+            fields.get("date_from", "ctl00$MainBodyContent$txtDateReceivedFrom"): date_from.strftime("%d/%m/%Y"),
+            fields.get("date_to", "ctl00$MainBodyContent$txtDateReceivedTo"): date_to.strftime("%d/%m/%Y"),
+            fields.get("search_btn", "ctl00$MainBodyContent$btnSearch"): "Search",
         }
+
+        # For Northgate/PlanningExplorer portals (detected by simple field
+        # names like 'txtProposal'), add the date-range radio selector and
+        # empty select defaults that the form requires.
+        if fields.get("proposal") == "txtProposal":
+            form_data.update({
+                "rbGroup": "rbRange",
+                "edrDateSelection": "",
+                "cboSelectDateValue": "DATE_RECEIVED",
+                "cboApplicationTypeCode": "",
+                "cboStatusCode": "",
+                "cboConstituencyCode": "",
+                "cboWardCode": "",
+                "cboDevelopmentTypeCode": "",
+            })
+
         form_data.update(self.config.extra_params)
 
-        resp = await self.fetch(
-            search_url,
-            method="POST",
-            data=form_data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            use_cache=False,
-        )
+        # Northgate portals redirect POST → 302 → results page.
+        # The results page requires the Referer header to load properly.
+        # We disable auto-redirect and follow manually with proper headers.
+        is_northgate = fields.get("proposal") == "txtProposal"
+
+        if is_northgate and self.session:
+            raw_resp = await self.session.request(
+                "POST",
+                search_url,
+                data=form_data,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Referer": search_url,
+                },
+                follow_redirects=False,
+            )
+            self.metrics.requests_made += 1
+            self.metrics.requests_successful += 1
+
+            if raw_resp.status_code in (301, 302, 303, 307, 308):
+                redirect_url = raw_resp.headers.get("location", "")
+                if redirect_url:
+                    redirect_url = urljoin(self.config.base_url, redirect_url)
+                    resp = await self.fetch(
+                        redirect_url,
+                        headers={"Referer": search_url},
+                        use_cache=False,
+                    )
+                else:
+                    resp = raw_resp
+            else:
+                resp = raw_resp
+        else:
+            resp = await self.fetch(
+                search_url,
+                method="POST",
+                data=form_data,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Referer": search_url,
+                },
+                use_cache=False,
+            )
+
+        # Track the URL of the results page for correct relative URL resolution
+        current_results_url = str(resp.url) if hasattr(resp, "url") else search_url
 
         for page_num in range(1, max_pages + 1):
-            page_results = self._parse_results_page(resp.text)
+            page_results = self._parse_results_page(resp.text, results_url=current_results_url)
             if not page_results:
                 break
 
@@ -289,7 +402,7 @@ class NECScraper(BaseScraper):
     # Parse results page
     # ------------------------------------------------------------------
 
-    def _parse_results_page(self, html: str) -> list[dict[str, Any]]:
+    def _parse_results_page(self, html: str, results_url: str | None = None) -> list[dict[str, Any]]:
         """
         Parse NEC Planning Explorer results page.
 
@@ -340,8 +453,13 @@ class NECScraper(BaseScraper):
             detail_url = ""
             if link and isinstance(link, Tag):
                 ref_text = link.get_text(strip=True)
+                # Use the results page URL as base for relative links,
+                # falling back to the config base_url.  This handles
+                # Northgate portals where detail links are relative to
+                # the /Northgate/PlanningExplorer/Generic/ path.
+                base_for_join = results_url or self.config.base_url
                 detail_url = urljoin(
-                    self.config.base_url, str(link.get("href", ""))
+                    base_for_join, str(link.get("href", ""))
                 )
 
             cell_texts = [c.get_text(strip=True) for c in cells]

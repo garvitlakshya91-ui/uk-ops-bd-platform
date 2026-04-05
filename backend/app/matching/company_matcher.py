@@ -299,7 +299,24 @@ class CompanyMatcher:
             except Exception:
                 log.exception("companies_house_verification_failed")
 
-        # 5. Create new company.
+        # 5. Check if CH number already exists (avoid unique constraint violation).
+        if ch_data and ch_data.get("companies_house_number"):
+            ch_num = ch_data["companies_house_number"]
+            existing = (
+                self._db.query(Company)
+                .filter(Company.companies_house_number == ch_num)
+                .first()
+            )
+            if existing:
+                log.info(
+                    "company_matched_by_ch_number",
+                    company_id=existing.id,
+                    ch_number=ch_num,
+                )
+                self._ensure_alias(existing, raw_name, source)
+                return existing
+
+        # 6. Create new company.
         company = Company(
             name=raw_name,
             normalized_name=norm,

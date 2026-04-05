@@ -1,3 +1,14 @@
+# Database backups
+backups/*.dump
+
+# Celery
+celery_worker*.log
+celery_beat*.log
+celerybeat-schedule*
+
+# Environment
+backend/.env
+
 # Python
 __pycache__/
 *.py[cod]

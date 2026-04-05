@@ -1,16 +1,16 @@
-"""Add scheme_contracts, scheme_change_logs tables and enhance existing_schemes.
+"""Add scheme_contracts, scheme_change_logs tables and enhance schemes.
 
 Revision ID: 002_scheme_contracts
 Revises: 001_initial
 Create Date: 2026-03-26
 
 Adds:
-- New columns on existing_schemes: asset_manager_company_id, landlord_company_id,
+- New columns on schemes: asset_manager_company_id, landlord_company_id,
   status, source, source_reference, last_verified_at, data_confidence_score.
 - scheme_contracts table for contract history tracking.
 - scheme_change_logs table for audit trail on scheme field changes.
 - Indexes on new columns and tables.
-- Data migration: copies legacy contract data from existing_schemes into
+- Data migration: copies legacy contract data from schemes into
   scheme_contracts.
 """
 from typing import Sequence, Union
@@ -28,11 +28,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # ------------------------------------------------------------------
-    # 1. Add new columns to existing_schemes (all nullable for backward
+    # 1. Add new columns to schemes (all nullable for backward
     #    compatibility with existing rows).
     # ------------------------------------------------------------------
     op.add_column(
-        "existing_schemes",
+        "schemes",
         sa.Column(
             "asset_manager_company_id",
             sa.Integer(),
@@ -41,7 +41,7 @@ def upgrade() -> None:
         ),
     )
     op.add_column(
-        "existing_schemes",
+        "schemes",
         sa.Column(
             "landlord_company_id",
             sa.Integer(),
@@ -50,24 +50,15 @@ def upgrade() -> None:
         ),
     )
     op.add_column(
-        "existing_schemes",
-        sa.Column(
-            "status",
-            sa.String(50),
-            nullable=True,
-            server_default="operational",
-        ),
-    )
-    op.add_column(
-        "existing_schemes",
+        "schemes",
         sa.Column("source", sa.String(100), nullable=True),
     )
     op.add_column(
-        "existing_schemes",
+        "schemes",
         sa.Column("source_reference", sa.String(500), nullable=True),
     )
     op.add_column(
-        "existing_schemes",
+        "schemes",
         sa.Column(
             "last_verified_at",
             sa.DateTime(timezone=True),
@@ -75,34 +66,29 @@ def upgrade() -> None:
         ),
     )
     op.add_column(
-        "existing_schemes",
+        "schemes",
         sa.Column("data_confidence_score", sa.Float(), nullable=True),
     )
 
-    # Indexes on the new existing_schemes columns
+    # Indexes on the new schemes columns
     op.create_index(
-        "ix_existing_schemes_status",
-        "existing_schemes",
-        ["status"],
-    )
-    op.create_index(
-        "ix_existing_schemes_source",
-        "existing_schemes",
+        "ix_schemes_source",
+        "schemes",
         ["source"],
     )
     op.create_index(
-        "ix_existing_schemes_last_verified_at",
-        "existing_schemes",
+        "ix_schemes_last_verified_at",
+        "schemes",
         ["last_verified_at"],
     )
     op.create_index(
-        "ix_existing_schemes_asset_manager_company_id",
-        "existing_schemes",
+        "ix_schemes_asset_manager_company_id",
+        "schemes",
         ["asset_manager_company_id"],
     )
     op.create_index(
-        "ix_existing_schemes_landlord_company_id",
-        "existing_schemes",
+        "ix_schemes_landlord_company_id",
+        "schemes",
         ["landlord_company_id"],
     )
 
@@ -115,7 +101,7 @@ def upgrade() -> None:
         sa.Column(
             "scheme_id",
             sa.Integer(),
-            sa.ForeignKey("existing_schemes.id", ondelete="CASCADE"),
+            sa.ForeignKey("schemes.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("contract_reference", sa.String(500), nullable=True),
@@ -194,7 +180,7 @@ def upgrade() -> None:
         sa.Column(
             "scheme_id",
             sa.Integer(),
-            sa.ForeignKey("existing_schemes.id", ondelete="CASCADE"),
+            sa.ForeignKey("schemes.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("field_name", sa.String(100), nullable=False),
@@ -227,7 +213,7 @@ def upgrade() -> None:
     )
 
     # ------------------------------------------------------------------
-    # 4. Data migration: copy legacy contract info from existing_schemes
+    # 4. Data migration: copy legacy contract info from schemes
     #    into scheme_contracts so that historical data is preserved.
     # ------------------------------------------------------------------
     op.execute(
@@ -243,7 +229,7 @@ def upgrade() -> None:
                 operator_company_id,
                 'legacy_migration',
                 TRUE
-            FROM existing_schemes
+            FROM schemes
             WHERE contract_start_date IS NOT NULL
                OR contract_end_date IS NOT NULL
             """
@@ -259,18 +245,16 @@ def downgrade() -> None:
     op.drop_table("scheme_change_logs")
     op.drop_table("scheme_contracts")
 
-    # Drop indexes on existing_schemes columns
-    op.drop_index("ix_existing_schemes_landlord_company_id", table_name="existing_schemes")
-    op.drop_index("ix_existing_schemes_asset_manager_company_id", table_name="existing_schemes")
-    op.drop_index("ix_existing_schemes_last_verified_at", table_name="existing_schemes")
-    op.drop_index("ix_existing_schemes_source", table_name="existing_schemes")
-    op.drop_index("ix_existing_schemes_status", table_name="existing_schemes")
+    # Drop indexes on schemes columns
+    op.drop_index("ix_schemes_landlord_company_id", table_name="schemes")
+    op.drop_index("ix_schemes_asset_manager_company_id", table_name="schemes")
+    op.drop_index("ix_schemes_last_verified_at", table_name="schemes")
+    op.drop_index("ix_schemes_source", table_name="schemes")
 
-    # Drop new columns from existing_schemes
-    op.drop_column("existing_schemes", "data_confidence_score")
-    op.drop_column("existing_schemes", "last_verified_at")
-    op.drop_column("existing_schemes", "source_reference")
-    op.drop_column("existing_schemes", "source")
-    op.drop_column("existing_schemes", "status")
-    op.drop_column("existing_schemes", "landlord_company_id")
-    op.drop_column("existing_schemes", "asset_manager_company_id")
+    # Drop new columns from schemes
+    op.drop_column("schemes", "data_confidence_score")
+    op.drop_column("schemes", "last_verified_at")
+    op.drop_column("schemes", "source_reference")
+    op.drop_column("schemes", "source")
+    op.drop_column("schemes", "landlord_company_id")
+    op.drop_column("schemes", "asset_manager_company_id")

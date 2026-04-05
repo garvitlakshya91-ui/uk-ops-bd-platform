@@ -45,16 +45,15 @@ class IdoxCouncilConfig:
 
 # At least 30 real Idox council portal URLs
 IDOX_COUNCILS: list[IdoxCouncilConfig] = [
-    IdoxCouncilConfig(name="Birmingham", council_id=1, base_url="https://eplanning.birmingham.gov.uk/Apex"),
+    # Birmingham moved to NEC — uses Northgate/Apex portal, not Idox.
     IdoxCouncilConfig(name="Manchester", council_id=2, base_url="https://pa.manchester.gov.uk/online-applications"),
     IdoxCouncilConfig(name="Leeds", council_id=3, base_url="https://publicaccess.leeds.gov.uk/online-applications"),
     IdoxCouncilConfig(name="Bristol", council_id=4, base_url="https://pa.bristol.gov.uk/online-applications"),
     IdoxCouncilConfig(name="Sheffield", council_id=5, base_url="https://planningapps.sheffield.gov.uk/online-applications"),
-    IdoxCouncilConfig(name="Liverpool", council_id=6, base_url="https://pa.liverpool.gov.uk/online-applications"),
-    IdoxCouncilConfig(name="Newcastle", council_id=7, base_url="https://publicaccess.newcastle.gov.uk/online-applications"),
+    # Liverpool moved to NEC (Northgate). Newcastle migrated off Idox.
     IdoxCouncilConfig(name="Nottingham", council_id=8, base_url="https://publicaccess.nottinghamcity.gov.uk/online-applications"),
     IdoxCouncilConfig(name="Leicester", council_id=9, base_url="https://planning.leicester.gov.uk/online-applications"),
-    IdoxCouncilConfig(name="Coventry", council_id=10, base_url="https://planning.coventry.gov.uk/server"),
+    # Coventry migrated off Idox to a custom portal.
     IdoxCouncilConfig(name="Bradford", council_id=11, base_url="https://planning.bradford.gov.uk/online-applications"),
     IdoxCouncilConfig(name="Wolverhampton", council_id=12, base_url="https://planning.wolverhampton.gov.uk/online-applications"),
     IdoxCouncilConfig(name="Plymouth", council_id=13, base_url="https://planning.plymouth.gov.uk/online-applications"),
@@ -63,13 +62,14 @@ IDOX_COUNCILS: list[IdoxCouncilConfig] = [
     IdoxCouncilConfig(name="Portsmouth", council_id=16, base_url="https://publicaccess.portsmouth.gov.uk/online-applications"),
     IdoxCouncilConfig(name="Brighton", council_id=17, base_url="https://planningapps.brighton-hove.gov.uk/online-applications"),
     IdoxCouncilConfig(name="Bournemouth", council_id=18, base_url="https://planning.bournemouth.gov.uk/online-applications"),
-    IdoxCouncilConfig(name="Sunderland", council_id=19, base_url="https://publicaccess.sunderland.gov.uk/online-applications"),
-    IdoxCouncilConfig(name="Reading", council_id=20, base_url="https://planning.reading.gov.uk/fastweb"),
-    IdoxCouncilConfig(name="Luton", council_id=21, base_url="https://publicaccess.luton.gov.uk/online-applications"),
-    IdoxCouncilConfig(name="Milton Keynes", council_id=22, base_url="https://publicaccess.milton-keynes.gov.uk/online-applications"),
+    IdoxCouncilConfig(name="Sunderland", council_id=19, base_url="https://online-applications.sunderland.gov.uk/online-applications"),
+    # Reading uses FastWeb/NEC — moved to NEC scraper.
+    # IdoxCouncilConfig(name="Reading", council_id=20, base_url="https://planning.reading.gov.uk/fastweb"),
+    IdoxCouncilConfig(name="Luton", council_id=21, base_url="https://planning.luton.gov.uk/online-applications"),
+    # Milton Keynes migrated to Salesforce-based system.
     IdoxCouncilConfig(name="Walsall", council_id=23, base_url="https://planning.walsall.gov.uk/online-applications"),
-    IdoxCouncilConfig(name="Peterborough", council_id=24, base_url="https://publicaccess.peterborough.gov.uk/online-applications"),
-    IdoxCouncilConfig(name="Slough", council_id=25, base_url="https://publicaccess.slough.gov.uk/online-applications"),
+    IdoxCouncilConfig(name="Peterborough", council_id=24, base_url="https://planpa.peterborough.gov.uk/online-applications"),
+    # Slough migrated to IEG4/Agile Applications.
     IdoxCouncilConfig(name="Oxford", council_id=26, base_url="https://public.oxford.gov.uk/online-applications"),
     IdoxCouncilConfig(name="Cambridge", council_id=27, base_url="https://applications.greatercambridgeplanning.org/online-applications"),
     IdoxCouncilConfig(name="Exeter", council_id=28, base_url="https://publicaccess.exeter.gov.uk/online-applications"),
@@ -80,6 +80,19 @@ IDOX_COUNCILS: list[IdoxCouncilConfig] = [
     IdoxCouncilConfig(name="Tower Hamlets", council_id=33, base_url="https://development.towerhamlets.gov.uk/online-applications"),
     IdoxCouncilConfig(name="Southwark", council_id=34, base_url="https://planning.southwark.gov.uk/online-applications"),
     IdoxCouncilConfig(name="Lambeth", council_id=35, base_url="https://planning.lambeth.gov.uk/online-applications"),
+    # Reclassified from Civica — these are actually Idox portals
+    IdoxCouncilConfig(name="Barnet", council_id=36, base_url="https://publicaccess.barnet.gov.uk/online-applications"),
+    IdoxCouncilConfig(name="Harrow", council_id=37, base_url="https://planningsearch.harrow.gov.uk/online-applications"),
+    IdoxCouncilConfig(name="Ealing", council_id=38, base_url="https://pam.ealing.gov.uk/online-applications"),
+    IdoxCouncilConfig(name="Bexley", council_id=41, base_url="https://pa.bexley.gov.uk/online-applications"),
+    IdoxCouncilConfig(name="Enfield", council_id=42, base_url="https://planningandbuildingcontrol.enfield.gov.uk/online-applications"),
+    IdoxCouncilConfig(name="Kingston upon Thames", council_id=46, base_url="https://publicaccess.kingston.gov.uk/online-applications"),
+    IdoxCouncilConfig(name="Sutton", council_id=47, base_url="https://planningregister.sutton.gov.uk/online-applications"),
+    # Reclassified from NEC — these are actually Idox portals
+    IdoxCouncilConfig(name="Croydon", council_id=200, base_url="https://publicaccess3.croydon.gov.uk/online-applications"),
+    IdoxCouncilConfig(name="Bromley", council_id=201, base_url="https://searchapplications.bromley.gov.uk/online-applications"),
+    IdoxCouncilConfig(name="Greenwich", council_id=205, base_url="https://planning.royalgreenwich.gov.uk/online-applications"),
+    IdoxCouncilConfig(name="Lewisham", council_id=204, base_url="https://planning.lewisham.gov.uk/online-applications"),
 ]
 
 # Keywords cycled in advanced searches to find relevant applications
@@ -462,11 +475,21 @@ class IdoxScraper(BaseScraper):
             form_data["org.apache.struts.taglib.html.TOKEN"] = self._csrf_token
         form_data.update(self.config.extra_search_params)
 
+        # Idox portals require browser-like headers on POST (WAF protection)
+        base_origin = self.config.base_url.split("/online-applications")[0]
+        post_headers: dict[str, str] = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": search_url,
+            "Origin": base_origin,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-GB,en;q=0.9",
+        }
+
         resp = await self.fetch(
             search_url,
             method="POST",
             data=form_data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            headers=post_headers,
             use_cache=False,
         )
 
@@ -571,11 +594,32 @@ class IdoxScraper(BaseScraper):
             return None
 
         href = str(link.get("href", ""))
-        reference = link.get_text(strip=True)
         detail_url = urljoin(self.config.base_url, href)
 
+        # The <a> link text is the description (inside summaryLinkTextClamp),
+        # NOT the reference.  Reference lives in <p class="metaInfo">.
+        description = link.get_text(strip=True)
+        reference = ""
+
+        # Extract reference from metaInfo: "Ref. No: 26/9/00058/MOD"
+        meta_el = li.find("p", class_="metaInfo")
+        if meta_el:
+            meta_text = meta_el.get_text(" ", strip=True)
+            ref_match = re.search(r"Ref\.?\s*No[.:]?\s*([A-Z0-9/]+(?:\s*/\s*[A-Z0-9/]+)*)", meta_text, re.IGNORECASE)
+            if ref_match:
+                reference = ref_match.group(1).strip()
+            # Extract status from metaInfo too
+            status_match = re.search(r"Status:\s*(\w[\w\s]*?)(?:\||$)", meta_text)
+            status = status_match.group(1).strip() if status_match else ""
+        else:
+            status = ""
+
+        # If no metaInfo reference, fall back to extracting from keyVal param
+        if not reference:
+            key_match = re.search(r"keyVal=(\w+)", href)
+            reference = key_match.group(1) if key_match else link.get_text(strip=True)
+
         address = ""
-        description = ""
 
         # Address is often in the first <p> or span after the link
         addr_el = li.find("p", class_="address") or li.find("span", class_="address")
@@ -596,12 +640,11 @@ class IdoxScraper(BaseScraper):
             if len(text_parts) > 2:
                 description = " ".join(text_parts[2:])
 
-        status = ""
         status_el = li.find("span", class_="status") or li.find(
             "p", class_="status"
         )
         if status_el:
-            status = status_el.get_text(strip=True)
+            status = status_el.get_text(strip=True) or status
 
         return {
             "reference": reference,

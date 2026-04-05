@@ -45,6 +45,103 @@ async def _run_scraper(scraper):
         return await scraper.run()
 
 
+def _save_planning_applications(
+    db: Session,
+    council_id: int,
+    results: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Persist scraped planning application results to the database.
+
+    Upserts by (reference, council_id): updates existing records, inserts new
+    ones.  Returns summary counts.
+
+    Parameters
+    ----------
+    db : Session
+        Active SQLAlchemy session.
+    council_id : int
+        ID of the council these applications belong to.
+    results : list
+        List of normalised application dicts from scraper.run().
+
+    Returns
+    -------
+    dict with keys: found, new, updated, errors.
+    """
+    from app.models.models import PlanningApplication
+
+    found = len(results)
+    new = 0
+    updated = 0
+    errors = 0
+
+    for app_data in results:
+        try:
+            reference = app_data.get("reference") or app_data.get("notice_id", "")
+            if not reference:
+                errors += 1
+                continue
+
+            existing = (
+                db.query(PlanningApplication)
+                .filter(
+                    PlanningApplication.reference == reference,
+                    PlanningApplication.council_id == council_id,
+                )
+                .first()
+            )
+
+            if existing:
+                # Update fields that may have changed.
+                _update_fields = [
+                    "address", "postcode", "description", "applicant_name",
+                    "agent_name", "application_type", "status", "scheme_type",
+                    "num_units", "submission_date", "decision_date",
+                    "documents_url",
+                ]
+                changed = False
+                for field in _update_fields:
+                    new_val = app_data.get(field)
+                    if new_val and new_val != getattr(existing, field, None):
+                        setattr(existing, field, new_val)
+                        changed = True
+                if changed:
+                    updated += 1
+            else:
+                app = PlanningApplication(
+                    reference=reference,
+                    council_id=council_id,
+                    address=app_data.get("address"),
+                    postcode=app_data.get("postcode"),
+                    description=app_data.get("description"),
+                    applicant_name=app_data.get("applicant_name"),
+                    agent_name=app_data.get("agent_name"),
+                    application_type=app_data.get("application_type"),
+                    status=app_data.get("status"),
+                    scheme_type=app_data.get("scheme_type", "Unknown"),
+                    num_units=app_data.get("num_units"),
+                    submission_date=app_data.get("submission_date"),
+                    decision_date=app_data.get("decision_date"),
+                    documents_url=app_data.get("documents_url"),
+                    raw_html=app_data.get("raw_html"),
+                )
+                db.add(app)
+                new += 1
+
+            db.commit()
+
+        except Exception:
+            logger.exception(
+                "save_planning_application_failed",
+                reference=app_data.get("reference"),
+                council_id=council_id,
+            )
+            errors += 1
+            db.rollback()
+
+    return {"found": found, "new": new, "updated": updated, "errors": errors}
+
+
 @celery_app.task(
     bind=True,
     name="app.tasks.scraping_tasks.scrape_council",
@@ -97,13 +194,28 @@ def scrape_council(self, council_id: int) -> dict[str, Any]:
             scraper_class_name = council.scraper_class or council.portal_type
             scraper = _load_scraper(scraper_class_name, council)
 
-            result = scraper.scrape()
+            # Scrapers use async context managers — run via _run_async.
+            raw_results = _run_async(_run_scraper(scraper))
 
-            run.applications_found = result.get("found", 0)
-            run.applications_new = result.get("new", 0)
-            run.applications_updated = result.get("updated", 0)
-            run.errors_count = result.get("errors", 0)
-            run.error_details = result.get("error_details")
+            # raw_results is a list of dicts from scraper.run()
+            if isinstance(raw_results, list):
+                # Persist results via the orchestrator's save logic.
+                from app.scrapers.orchestrator import ScraperOrchestrator
+                save_result = _save_planning_applications(
+                    db, council.id, raw_results
+                )
+                run.applications_found = save_result["found"]
+                run.applications_new = save_result["new"]
+                run.applications_updated = save_result["updated"]
+                run.errors_count = save_result.get("errors", 0)
+            else:
+                result = raw_results if isinstance(raw_results, dict) else {}
+                run.applications_found = result.get("found", 0)
+                run.applications_new = result.get("new", 0)
+                run.applications_updated = result.get("updated", 0)
+                run.errors_count = result.get("errors", 0)
+
+            run.error_details = None
             run.status = "success" if run.errors_count == 0 else "partial"
             run.completed_at = datetime.datetime.now(datetime.timezone.utc)
 
@@ -762,30 +874,58 @@ def refresh_scheme_data(self, scheme_id: int) -> dict[str, Any]:
 # Scraper loader
 # ---------------------------------------------------------------------------
 
-class _StubScraper:
-    """Placeholder scraper returned when the real scraper module is not yet
-    available.  Prevents task failures during development.
+def _build_scraper_config(portal_type: str, council: Council) -> Any:
+    """Build a typed scraper config object from a Council ORM model.
+
+    Each scraper expects its own config dataclass (IdoxCouncilConfig,
+    NECCouncilConfig, CivicaCouncilConfig).  This function bridges the
+    generic Council table row to the specific config shape.
     """
+    portal = portal_type.lower()
 
-    def __init__(self, name: str) -> None:
-        self._name = name
-
-    def scrape(self) -> dict[str, Any]:
-        logger.warning("stub_scraper_used", scraper=self._name)
-        return {"found": 0, "new": 0, "updated": 0, "errors": 0}
+    if portal == "idox":
+        from app.scrapers.idox_scraper import IdoxCouncilConfig
+        return IdoxCouncilConfig(
+            name=council.name,
+            council_id=council.id,
+            base_url=council.portal_url or "",
+        )
+    elif portal == "nec":
+        from app.scrapers.nec_scraper import NECCouncilConfig
+        return NECCouncilConfig(
+            name=council.name,
+            council_id=council.id,
+            base_url=council.portal_url or "",
+        )
+    elif portal == "civica":
+        from app.scrapers.civica_scraper import CivicaCouncilConfig
+        return CivicaCouncilConfig(
+            name=council.name,
+            council_id=council.id,
+            base_url=council.portal_url or "",
+        )
+    else:
+        return None
 
 
 def _load_scraper(scraper_class_name: str | None, council: Council | None) -> Any:
-    """Dynamically load a scraper class by name.
+    """Dynamically load and instantiate the right scraper for a council.
 
-    Falls back to :class:`_StubScraper` if the module is not found, so that
-    the task infrastructure can be tested independently of scraper
-    implementations.
+    Builds a typed config object from the Council ORM model and passes it
+    to the scraper constructor.  Returns the scraper instance ready to use
+    via ``await scraper.run()`` inside an async context manager.
+
+    Raises ``ValueError`` if the portal type is unsupported — no longer
+    silently falls back to a stub, since that masked real scraping failures.
     """
-    if not scraper_class_name:
-        return _StubScraper("unknown")
+    if not scraper_class_name or not council:
+        raise ValueError(
+            f"Cannot load scraper: class={scraper_class_name}, council={council}"
+        )
 
-    # Map portal types to expected module paths.
+    portal = scraper_class_name.lower()
+
+    # Map portal types to module paths.
     scraper_map: dict[str, str] = {
         "idox": "app.scrapers.idox_scraper.IdoxScraper",
         "civica": "app.scrapers.civica_scraper.CivicaScraper",
@@ -794,20 +934,20 @@ def _load_scraper(scraper_class_name: str | None, council: Council | None) -> An
         "find_a_tender": "app.scrapers.find_a_tender.FindATenderScraper",
     }
 
-    module_path = scraper_map.get(scraper_class_name.lower(), scraper_class_name)
+    module_path = scraper_map.get(portal, scraper_class_name)
 
-    try:
-        parts = module_path.rsplit(".", 1)
-        if len(parts) == 2:
-            import importlib
-            mod = importlib.import_module(parts[0])
-            cls = getattr(mod, parts[1])
-            return cls(council=council) if council else cls()
-    except (ImportError, AttributeError) as exc:
-        logger.warning(
-            "scraper_load_fallback",
-            scraper=scraper_class_name,
-            error=str(exc),
-        )
+    import importlib
+    parts = module_path.rsplit(".", 1)
+    if len(parts) != 2:
+        raise ValueError(f"Invalid scraper path: {module_path}")
 
-    return _StubScraper(scraper_class_name)
+    mod = importlib.import_module(parts[0])
+    cls = getattr(mod, parts[1])
+
+    # For web-portal scrapers, build a typed config object.
+    if portal in ("idox", "nec", "civica"):
+        config = _build_scraper_config(portal, council)
+        return cls(config=config)
+
+    # For API-based scrapers, pass council directly if accepted.
+    return cls()

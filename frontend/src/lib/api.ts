@@ -390,6 +390,20 @@ export async function getScraperHistory(councilId: string) {
   return data;
 }
 
+// Account / Profile
+export async function updateProfile(updates: { name?: string; email?: string }) {
+  const { data } = await api.put('/auth/me', updates);
+  return data;
+}
+
+export async function changePassword(currentPassword: string, newPassword: string) {
+  const { data } = await api.post('/auth/change-password', {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+  return data;
+}
+
 // User Management
 export interface UserRecord {
   id: string;

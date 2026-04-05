@@ -100,20 +100,22 @@ function SidebarUser() {
   return (
     <div className="px-4 py-4 border-t border-slate-800/80">
       <div className="flex items-center gap-3">
-        <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-lg shadow-blue-500/20">
-          {getInitials(user.name)}
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-white truncate">{user.name}</p>
-          <span
-            className={cn(
-              'inline-block mt-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded border',
-              roleColor
-            )}
-          >
-            {roleLabel}
-          </span>
-        </div>
+        <Link href="/account" className="flex items-center gap-3 flex-1 min-w-0 group">
+          <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-sm font-bold text-white shadow-lg shadow-blue-500/20">
+            {getInitials(user.name)}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-white truncate group-hover:text-blue-400 transition-colors">{user.name}</p>
+            <span
+              className={cn(
+                'inline-block mt-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded border',
+                roleColor
+              )}
+            >
+              {roleLabel}
+            </span>
+          </div>
+        </Link>
         <button
           onClick={logout}
           title="Sign out"

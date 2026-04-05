@@ -118,15 +118,15 @@ ENGLISH_LPA_MAPPING = [
         "name": "Bexley",
         "organisation_entity": "43",
         "region": "London",
-        "portal_type": "civica",
-        "portal_url": "https://publicaccess.bexley.gov.uk",
+        "portal_type": "idox",
+        "portal_url": "https://pa.bexley.gov.uk/online-applications",
     },
     {
         "name": "Birmingham",
         "organisation_entity": "44",
         "region": "West Midlands",
-        "portal_type": "idox",
-        "portal_url": "https://eplanning.birmingham.gov.uk/Apex",
+        "portal_type": "nec",
+        "portal_url": "https://eplanning.birmingham.gov.uk",
     },
     {
         "name": "Blaby",
@@ -144,8 +144,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Barnet",
         "organisation_entity": "48",
         "region": "London",
-        "portal_type": "civica",
-        "portal_url": "https://publicaccess.barnet.gov.uk",
+        "portal_type": "idox",
+        "portal_url": "https://publicaccess.barnet.gov.uk/online-applications",
     },
     {
         "name": "Brighton and Hove",
@@ -250,8 +250,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Bromley",
         "organisation_entity": "65",
         "region": "London",
-        "portal_type": "nec",
-        "portal_url": "https://searchapplications.bromley.gov.uk",
+        "portal_type": "idox",
+        "portal_url": "https://searchapplications.bromley.gov.uk/online-applications",
     },
     {
         "name": "Bristol",
@@ -413,8 +413,7 @@ ENGLISH_LPA_MAPPING = [
         "name": "Coventry",
         "organisation_entity": "96",
         "region": "West Midlands",
-        "portal_type": "idox",
-        "portal_url": "https://planning.coventry.gov.uk/server",
+        "portal_type": "api",
     },
     {
         "name": "Craven",
@@ -432,8 +431,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Croydon",
         "organisation_entity": "100",
         "region": "London",
-        "portal_type": "nec",
-        "portal_url": "https://publicaccess.croydon.gov.uk",
+        "portal_type": "idox",
+        "portal_url": "https://publicaccess3.croydon.gov.uk/online-applications",
     },
     # -------------------------------------------------------------------------
     # D
@@ -506,8 +505,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Ealing",
         "organisation_entity": "115",
         "region": "London",
-        "portal_type": "civica",
-        "portal_url": "https://publicaccess.ealing.gov.uk",
+        "portal_type": "idox",
+        "portal_url": "https://pam.ealing.gov.uk/online-applications",
     },
     {
         "name": "Eastbourne",
@@ -561,8 +560,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Enfield",
         "organisation_entity": "126",
         "region": "London",
-        "portal_type": "civica",
-        "portal_url": "https://publicaccess.enfield.gov.uk",
+        "portal_type": "idox",
+        "portal_url": "https://planningandbuildingcontrol.enfield.gov.uk/online-applications",
     },
     {
         "name": "Epping Forest",
@@ -678,8 +677,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Greenwich",
         "organisation_entity": "150",
         "region": "London",
-        "portal_type": "nec",
-        "portal_url": "https://publicaccess.greenwich.gov.uk",
+        "portal_type": "idox",
+        "portal_url": "https://planning.royalgreenwich.gov.uk/online-applications",
     },
     {
         "name": "Guildford",
@@ -749,7 +748,7 @@ ENGLISH_LPA_MAPPING = [
         "organisation_entity": "162",
         "region": "London",
         "portal_type": "civica",
-        "portal_url": "https://publicaccess.havering.gov.uk",
+        "portal_url": "https://development.havering.gov.uk",
     },
     {
         "name": "Hackney",
@@ -781,7 +780,7 @@ ENGLISH_LPA_MAPPING = [
         "organisation_entity": "167",
         "region": "London",
         "portal_type": "civica",
-        "portal_url": "https://publicaccess.hillingdon.gov.uk",
+        "portal_url": "https://planning.hillingdon.gov.uk",
     },
     {
         "name": "Hinckley and Bosworth",
@@ -800,7 +799,7 @@ ENGLISH_LPA_MAPPING = [
         "organisation_entity": "170",
         "region": "London",
         "portal_type": "civica",
-        "portal_url": "https://publicaccess.hounslow.gov.uk",
+        "portal_url": "https://planning.hounslow.gov.uk",
     },
     {
         "name": "Horsham",
@@ -818,8 +817,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Harrow",
         "organisation_entity": "174",
         "region": "London",
-        "portal_type": "civica",
-        "portal_url": "https://publicaccess.harrow.gov.uk",
+        "portal_type": "idox",
+        "portal_url": "https://planningsearch.harrow.gov.uk/online-applications",
     },
     {
         "name": "Haringey",
@@ -891,8 +890,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Kingston upon Thames",
         "organisation_entity": "188",
         "region": "London",
-        "portal_type": "civica",
-        "portal_url": "https://publicaccess.kingston.gov.uk",
+        "portal_type": "idox",
+        "portal_url": "https://publicaccess.kingston.gov.uk/online-applications",
     },
     {
         "name": "Knowsley",
@@ -940,8 +939,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Lewisham",
         "organisation_entity": "198",
         "region": "London",
-        "portal_type": "nec",
-        "portal_url": "https://publicaccess.lewisham.gov.uk",
+        "portal_type": "idox",
+        "portal_url": "https://planning.lewisham.gov.uk/online-applications",
     },
     {
         "name": "Lincoln",
@@ -959,8 +958,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Liverpool",
         "organisation_entity": "202",
         "region": "Merseyside",
-        "portal_type": "idox",
-        "portal_url": "https://pa.liverpool.gov.uk/online-applications",
+        "portal_type": "nec",
+        "portal_url": "http://northgate.liverpool.gov.uk",
     },
     {
         "name": "City of London",
@@ -973,7 +972,7 @@ ENGLISH_LPA_MAPPING = [
         "organisation_entity": "204",
         "region": "East of England",
         "portal_type": "idox",
-        "portal_url": "https://publicaccess.luton.gov.uk/online-applications",
+        "portal_url": "https://planning.luton.gov.uk/online-applications",
     },
     # -------------------------------------------------------------------------
     # M
@@ -1043,8 +1042,7 @@ ENGLISH_LPA_MAPPING = [
         "name": "Milton Keynes",
         "organisation_entity": "215",
         "region": "South East",
-        "portal_type": "idox",
-        "portal_url": "https://publicaccess.milton-keynes.gov.uk/online-applications",
+        "portal_type": "api",
     },
     {
         "name": "Mole Valley",
@@ -1056,8 +1054,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Merton",
         "organisation_entity": "217",
         "region": "London",
-        "portal_type": "civica",
-        "portal_url": "https://publicaccess.merton.gov.uk",
+        "portal_type": "nec",
+        "portal_url": "https://planning.merton.gov.uk",
     },
     {
         "name": "Mid Sussex",
@@ -1114,8 +1112,7 @@ ENGLISH_LPA_MAPPING = [
         "name": "Newcastle",
         "organisation_entity": "228",
         "region": "Tyne and Wear",
-        "portal_type": "idox",
-        "portal_url": "https://publicaccess.newcastle.gov.uk/online-applications",
+        "portal_type": "api",
     },
     {
         "name": "New Forest",
@@ -1264,7 +1261,7 @@ ENGLISH_LPA_MAPPING = [
         "organisation_entity": "257",
         "region": "East of England",
         "portal_type": "idox",
-        "portal_url": "https://publicaccess.peterborough.gov.uk/online-applications",
+        "portal_url": "https://planpa.peterborough.gov.uk/online-applications",
     },
     # -------------------------------------------------------------------------
     # R
@@ -1285,15 +1282,14 @@ ENGLISH_LPA_MAPPING = [
         "name": "Redbridge",
         "organisation_entity": "261",
         "region": "London",
-        "portal_type": "civica",
-        "portal_url": "https://publicaccess.redbridge.gov.uk",
+        "portal_type": "api",
     },
     {
         "name": "Reading",
         "organisation_entity": "262",
         "region": "South East",
-        "portal_type": "idox",
-        "portal_url": "https://planning.reading.gov.uk/fastweb",
+        "portal_type": "nec",
+        "portal_url": "https://planning.reading.gov.uk/fastweb_PL",
     },
     {
         "name": "Redditch",
@@ -1317,8 +1313,7 @@ ENGLISH_LPA_MAPPING = [
         "name": "Richmond upon Thames",
         "organisation_entity": "266",
         "region": "London",
-        "portal_type": "nec",
-        "portal_url": "https://publicaccess.richmond.gov.uk",
+        "portal_type": "api",
     },
     {
         "name": "Richmondshire",
@@ -1484,15 +1479,14 @@ ENGLISH_LPA_MAPPING = [
         "name": "Slough",
         "organisation_entity": "302",
         "region": "South East",
-        "portal_type": "idox",
-        "portal_url": "https://publicaccess.slough.gov.uk/online-applications",
+        "portal_type": "api",
     },
     {
         "name": "Sunderland",
         "organisation_entity": "303",
         "region": "Tyne and Wear",
         "portal_type": "idox",
-        "portal_url": "https://publicaccess.sunderland.gov.uk/online-applications",
+        "portal_url": "https://online-applications.sunderland.gov.uk/online-applications",
     },
     {
         "name": "South Norfolk",
@@ -1571,8 +1565,8 @@ ENGLISH_LPA_MAPPING = [
         "name": "Sutton",
         "organisation_entity": "319",
         "region": "London",
-        "portal_type": "civica",
-        "portal_url": "https://publicaccess.sutton.gov.uk",
+        "portal_type": "idox",
+        "portal_url": "https://planningregister.sutton.gov.uk/online-applications",
     },
     {
         "name": "Stroud",
@@ -1814,8 +1808,7 @@ ENGLISH_LPA_MAPPING = [
         "name": "Waltham Forest",
         "organisation_entity": "366",
         "region": "London",
-        "portal_type": "nec",
-        "portal_url": "https://publicaccess.walthamforest.gov.uk",
+        "portal_type": "api",
     },
     {
         "name": "Wigan",

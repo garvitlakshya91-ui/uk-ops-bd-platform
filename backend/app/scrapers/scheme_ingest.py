@@ -915,48 +915,62 @@ def ingest_tender_contracts(
             else None
         )
 
-        if existing:
-            _update_scheme_fields(
-                existing,
-                operator=operator,
-                owner=owner,
-                asset_manager=asset_manager,
-                address=address,
-                postcode=postcode,
-                scheme_type=scheme_type,
-                start_date=contract_data.start_date,
-                end_date=contract_data.end_date,
-                source="find_a_tender",
-                source_reference=contract_data.source_reference,
-                db=db,
-            )
-            scheme = existing
-            updated += 1
-        else:
-            scheme = ExistingScheme(
-                name=contract_data.title,
-                address=address,
-                postcode=postcode,
-                scheme_type=scheme_type,
-                operator_company_id=operator.id if operator else None,
-                owner_company_id=owner.id if owner else None,
-                asset_manager_company_id=asset_manager.id if asset_manager else None,
-                contract_start_date=contract_data.start_date,
-                contract_end_date=contract_data.end_date,
-                source="find_a_tender",
-                source_reference=contract_data.source_reference,
-                last_verified_at=datetime.now(timezone.utc),
-            )
-            db.add(scheme)
-            db.flush()  # Populate scheme.id for contract FK
-            scheme.data_confidence_score = _calculate_confidence(scheme)
-            created += 1
+        try:
+            if existing:
+                _update_scheme_fields(
+                    existing,
+                    operator=operator,
+                    owner=owner,
+                    asset_manager=asset_manager,
+                    address=address,
+                    postcode=postcode,
+                    scheme_type=scheme_type,
+                    start_date=contract_data.start_date,
+                    end_date=contract_data.end_date,
+                    source="find_a_tender",
+                    source_reference=contract_data.source_reference,
+                    db=db,
+                )
+                scheme = existing
+                updated += 1
+            else:
+                scheme = ExistingScheme(
+                    name=contract_data.title[:500],
+                    address=address,
+                    postcode=postcode,
+                    scheme_type=scheme_type,
+                    operator_company_id=operator.id if operator else None,
+                    owner_company_id=owner.id if owner else None,
+                    asset_manager_company_id=asset_manager.id if asset_manager else None,
+                    contract_start_date=contract_data.start_date,
+                    contract_end_date=contract_data.end_date,
+                    source="find_a_tender",
+                    source_reference=contract_data.source_reference,
+                    last_verified_at=datetime.now(timezone.utc),
+                )
+                db.add(scheme)
+                db.flush()  # Populate scheme.id for contract FK
+                scheme.data_confidence_score = _calculate_confidence(scheme)
+                created += 1
 
-        # --- Create SchemeContract ---
-        _create_scheme_contract(
-            scheme, contract_data, operator, owner, raw, db
-        )
-        contracts_created += 1
+            # --- Create SchemeContract ---
+            _create_scheme_contract(
+                scheme, contract_data, operator, owner, raw, db
+            )
+            contracts_created += 1
+
+            # Batch commit every 100 records
+            if (created + updated) % 100 == 0:
+                db.commit()
+        except Exception as exc:
+            db.rollback()
+            logger.warning(
+                "tender_record_failed",
+                title=contract_data.title[:120],
+                error=str(exc)[:200],
+            )
+            skipped += 1
+            continue
 
     db.commit()
     logger.info(
@@ -1108,48 +1122,62 @@ def ingest_contracts_finder(
             else None
         )
 
-        if existing:
-            _update_scheme_fields(
-                existing,
-                operator=operator,
-                owner=owner,
-                asset_manager=asset_manager,
-                address=address,
-                postcode=postcode,
-                scheme_type=scheme_type,
-                start_date=contract_data.start_date,
-                end_date=contract_data.end_date,
-                source="contracts_finder",
-                source_reference=contract_data.source_reference,
-                db=db,
-            )
-            scheme = existing
-            updated += 1
-        else:
-            scheme = ExistingScheme(
-                name=contract_data.title,
-                address=address,
-                postcode=postcode,
-                scheme_type=scheme_type,
-                operator_company_id=operator.id if operator else None,
-                owner_company_id=owner.id if owner else None,
-                asset_manager_company_id=asset_manager.id if asset_manager else None,
-                contract_start_date=contract_data.start_date,
-                contract_end_date=contract_data.end_date,
-                source="contracts_finder",
-                source_reference=contract_data.source_reference,
-                last_verified_at=datetime.now(timezone.utc),
-            )
-            db.add(scheme)
-            db.flush()
-            scheme.data_confidence_score = _calculate_confidence(scheme)
-            created += 1
+        try:
+            if existing:
+                _update_scheme_fields(
+                    existing,
+                    operator=operator,
+                    owner=owner,
+                    asset_manager=asset_manager,
+                    address=address,
+                    postcode=postcode,
+                    scheme_type=scheme_type,
+                    start_date=contract_data.start_date,
+                    end_date=contract_data.end_date,
+                    source="contracts_finder",
+                    source_reference=contract_data.source_reference,
+                    db=db,
+                )
+                scheme = existing
+                updated += 1
+            else:
+                scheme = ExistingScheme(
+                    name=contract_data.title[:500],
+                    address=address,
+                    postcode=postcode,
+                    scheme_type=scheme_type,
+                    operator_company_id=operator.id if operator else None,
+                    owner_company_id=owner.id if owner else None,
+                    asset_manager_company_id=asset_manager.id if asset_manager else None,
+                    contract_start_date=contract_data.start_date,
+                    contract_end_date=contract_data.end_date,
+                    source="contracts_finder",
+                    source_reference=contract_data.source_reference,
+                    last_verified_at=datetime.now(timezone.utc),
+                )
+                db.add(scheme)
+                db.flush()
+                scheme.data_confidence_score = _calculate_confidence(scheme)
+                created += 1
 
-        # --- Create SchemeContract ---
-        _create_scheme_contract(
-            scheme, contract_data, operator, owner, raw, db
-        )
-        contracts_created += 1
+            # --- Create SchemeContract ---
+            _create_scheme_contract(
+                scheme, contract_data, operator, owner, raw, db
+            )
+            contracts_created += 1
+
+            # Batch commit every 100 records
+            if (created + updated) % 100 == 0:
+                db.commit()
+        except Exception as exc:
+            db.rollback()
+            logger.warning(
+                "cf_record_failed",
+                title=contract_data.title[:120],
+                error=str(exc)[:200],
+            )
+            skipped += 1
+            continue
 
     db.commit()
     logger.info(
@@ -1775,14 +1803,36 @@ def ingest_brownfield_sites(
 
         # Deduplicate by reference
         brownfield_ref = f"brownfield:{reference}"
+
+        # Resolve council first (needed for dedup check)
+        org_entity = site.get("organisation_entity", "")
+        council_id = council_cache.get(org_entity)
+        if org_entity and council_id is None:
+            # Match by organisation_entity column (numeric ID from Planning Data API)
+            council = (
+                db.query(Council)
+                .filter(Council.organisation_entity == org_entity)
+                .first()
+            )
+            if council:
+                council_id = council.id
+            council_cache[org_entity] = council_id  # Cache even if None
+
+        if council_id is None:
+            skipped += 1
+            continue
+
+        # Check for existing record by (reference, council_id)
         existing = (
             db.query(PlanningApplication)
-            .filter(PlanningApplication.reference == brownfield_ref)
+            .filter(
+                PlanningApplication.reference == brownfield_ref,
+                PlanningApplication.council_id == council_id,
+            )
             .first()
         )
 
         if existing:
-            # Update if we have new info
             changed = False
             if num_units and not existing.num_units:
                 existing.num_units = num_units
@@ -1797,20 +1847,6 @@ def ingest_brownfield_sites(
             if changed:
                 updated += 1
             continue
-
-        # Resolve council from organisation_entity if possible
-        org_entity = site.get("organisation_entity", "")
-        council_id = council_cache.get(org_entity)
-        if org_entity and council_id is None:
-            # Try to find council - org entities are numeric IDs
-            council = (
-                db.query(Council)
-                .filter(Council.name.ilike(f"%{org_entity[:20]}%"))
-                .first()
-            )
-            if council:
-                council_id = council.id
-                council_cache[org_entity] = council_id
 
         app = PlanningApplication(
             reference=brownfield_ref,
@@ -1828,6 +1864,10 @@ def ingest_brownfield_sites(
         )
         db.add(app)
         created += 1
+
+        # Commit in batches of 500 to avoid huge transactions
+        if created % 500 == 0:
+            db.commit()
 
     db.commit()
     result = {"created": created, "updated": updated, "skipped": skipped}

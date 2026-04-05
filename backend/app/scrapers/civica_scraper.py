@@ -35,77 +35,27 @@ class CivicaCouncilConfig:
 
 
 CIVICA_COUNCILS: list[CivicaCouncilConfig] = [
-    CivicaCouncilConfig(
-        name="Barnet",
-        council_id=100,
-        base_url="https://publicaccess.barnet.gov.uk",
-        search_path="/online-applications/search.do?action=advanced",
-    ),
-    CivicaCouncilConfig(
-        name="Harrow",
-        council_id=101,
-        base_url="https://planningsearch.harrow.gov.uk",
-        search_path="/planning/search-applications",
-    ),
-    CivicaCouncilConfig(
-        name="Ealing",
-        council_id=102,
-        base_url="https://pam.ealing.gov.uk",
-        search_path="/online-applications/search.do?action=advanced",
-    ),
+    # Only genuine OcellaWeb portals remain here.
+    # 7 former entries were Idox (moved to idox_scraper.py)
+    # Merton was Northgate (moved to nec_scraper.py)
+    # Redbridge migrated to IEG4 (no scraper — falls back to API)
     CivicaCouncilConfig(
         name="Hounslow",
-        council_id=103,
+        council_id=39,
         base_url="https://planning.hounslow.gov.uk",
         search_path="/planning_search.aspx",
     ),
     CivicaCouncilConfig(
         name="Hillingdon",
-        council_id=104,
+        council_id=40,
         base_url="https://planning.hillingdon.gov.uk",
         search_path="/OcellaWeb/planningSearch",
     ),
     CivicaCouncilConfig(
-        name="Bexley",
-        council_id=105,
-        base_url="https://pa.bexley.gov.uk",
-        search_path="/online-applications/search.do?action=advanced",
-    ),
-    CivicaCouncilConfig(
-        name="Enfield",
-        council_id=106,
-        base_url="https://planningandbuildingcontrol.enfield.gov.uk",
-        search_path="/online-applications/search.do?action=advanced",
-    ),
-    CivicaCouncilConfig(
         name="Havering",
-        council_id=107,
+        council_id=43,
         base_url="https://development.havering.gov.uk",
         search_path="/OcellaWeb/planningSearch",
-    ),
-    CivicaCouncilConfig(
-        name="Redbridge",
-        council_id=108,
-        base_url="https://planning.redbridge.gov.uk",
-        search_path="/OcellaWeb/planningSearch",
-    ),
-    CivicaCouncilConfig(
-        name="Merton",
-        council_id=109,
-        base_url="https://planning.merton.gov.uk",
-        search_path="/Northgate/PlanningExplorer/GeneralSearch.aspx",
-    ),
-    CivicaCouncilConfig(
-        name="Kingston upon Thames",
-        council_id=110,
-        base_url="https://publicaccess.kingston.gov.uk",
-        search_path="/online-applications/search.do?action=advanced",
-    ),
-    CivicaCouncilConfig(
-        name="Sutton",
-        council_id=111,
-        base_url="https://publicaccess.sutton.gov.uk",
-        search_path="/online-applications/search.do?action=advanced",
     ),
 ]
 

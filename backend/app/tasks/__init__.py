@@ -116,6 +116,24 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=4, minute=15),
         "options": {"queue": "enrichment"},
     },
+    # Tier 1: CF award-stage date backfill (runs after text-based extraction)
+    "backfill-contract-dates-cf-awards-daily": {
+        "task": "app.tasks.enrichment_tasks.backfill_contract_dates_cf_awards",
+        "schedule": crontab(hour=4, minute=30),
+        "options": {"queue": "enrichment"},
+    },
+    # Tier 2: Duration inference (start + "N years" -> end)
+    "backfill-dates-from-duration-daily": {
+        "task": "app.tasks.enrichment_tasks.backfill_dates_from_duration",
+        "schedule": crontab(hour=4, minute=45),
+        "options": {"queue": "enrichment"},
+    },
+    # Tier 3: CPV/keyword-based typical duration estimates (weekly, low confidence)
+    "estimate-contract-dates-cpv-weekly": {
+        "task": "app.tasks.enrichment_tasks.estimate_contract_dates_cpv",
+        "schedule": crontab(hour=6, minute=30, day_of_week="thursday"),
+        "options": {"queue": "enrichment"},
+    },
     # RSH and HMLR data ingestion
     "ingest-rsh-registered-providers-monthly": {
         "task": "app.tasks.scraping_tasks.ingest_rsh_registered_providers",

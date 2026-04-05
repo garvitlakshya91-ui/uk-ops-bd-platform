@@ -40,7 +40,7 @@ class EPCScraper(BaseScraper):
 
     def __init__(
         self,
-        api_key: str = "",
+        api_key: str | None = None,
         rate_limit: float | None = 1.5,
         proxy_url: str | None = None,
     ) -> None:
@@ -51,6 +51,9 @@ class EPCScraper(BaseScraper):
             rate_limit=rate_limit,
             proxy_url=proxy_url,
         )
+        if api_key is None:
+            from app.config import settings
+            api_key = settings.EPC_API_KEY
         self.api_key = api_key
 
     def _auth_headers(self) -> dict[str, str]:
@@ -61,7 +64,12 @@ class EPCScraper(BaseScraper):
         if self.api_key:
             import base64
 
-            token = base64.b64encode(f"{self.api_key}:".encode()).decode()
+            # EPC API requires Basic auth with base64(email:apikey).
+            # If the key already contains ':', assume it's email:apikey format.
+            if ":" in self.api_key:
+                token = base64.b64encode(self.api_key.encode()).decode()
+            else:
+                token = base64.b64encode(f"{self.api_key}:".encode()).decode()
             headers["Authorization"] = f"Basic {token}"
         return headers
 
@@ -82,6 +90,9 @@ class EPCScraper(BaseScraper):
             headers=self._auth_headers(),
             use_cache=True,
         )
+        # EPC API returns empty body (200) when no results exist for a postcode.
+        if not response.text:
+            return {}
         return response.json()
 
     # ------------------------------------------------------------------

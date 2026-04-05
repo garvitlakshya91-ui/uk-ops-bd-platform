@@ -1,12 +1,12 @@
-"""Add HMLR CCOD fields to existing_schemes.
+"""Add HMLR CCOD fields to schemes.
 
 Revision ID: 003_add_hmlr_fields
 Revises: 002_scheme_contracts
 Create Date: 2026-03-29
 
 Adds:
-- existing_schemes.hmlr_title_number  -- HMLR title number from CCOD dataset
-- existing_schemes.hmlr_tenure        -- Freehold / Leasehold from CCOD
+- schemes.hmlr_title_number  -- HMLR title number from CCOD dataset
+- schemes.hmlr_tenure        -- Freehold / Leasehold from CCOD
 """
 from typing import Sequence, Union
 
@@ -21,7 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column(
-        "existing_schemes",
+        "schemes",
         sa.Column(
             "hmlr_title_number",
             sa.String(20),
@@ -30,7 +30,7 @@ def upgrade() -> None:
         ),
     )
     op.add_column(
-        "existing_schemes",
+        "schemes",
         sa.Column(
             "hmlr_tenure",
             sa.String(20),
@@ -39,13 +39,13 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "ix_existing_schemes_hmlr_title_number",
-        "existing_schemes",
+        "ix_schemes_hmlr_title_number",
+        "schemes",
         ["hmlr_title_number"],
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_existing_schemes_hmlr_title_number", table_name="existing_schemes")
-    op.drop_column("existing_schemes", "hmlr_tenure")
-    op.drop_column("existing_schemes", "hmlr_title_number")
+    op.drop_index("ix_schemes_hmlr_title_number", table_name="schemes")
+    op.drop_column("schemes", "hmlr_tenure")
+    op.drop_column("schemes", "hmlr_title_number")

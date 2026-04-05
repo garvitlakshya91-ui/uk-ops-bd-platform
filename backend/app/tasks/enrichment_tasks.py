@@ -28,18 +28,24 @@ def _get_db() -> Session:
 
 
 def _run_async(coro):
-    """Run an async coroutine from synchronous Celery task context."""
+    """Run an async coroutine from synchronous Celery task context.
+
+    Always creates a fresh event loop to avoid 'Event loop is closed' errors
+    that occur when reusing a loop closed by a previous ``asyncio.run()``.
+    """
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If there is already a running loop (e.g. in some test
-            # frameworks), create a new one in a thread.
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(asyncio.run, coro).result()
-        return loop.run_until_complete(coro)
+        loop = asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        loop = None
+
+    if loop is not None and loop.is_running():
+        # Already inside an async context — run in a thread.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            return pool.submit(asyncio.run, coro).result()
+
+    # No running loop — create a fresh one.
+    return asyncio.run(coro)
 
 
 @celery_app.task(
@@ -644,6 +650,10 @@ def enrich_schemes_with_epc() -> dict[str, Any]:
                         scheme_id=scheme.id,
                         postcode=scheme.postcode,
                     )
+                else:
+                    # Mark as checked so we don't re-query every run.
+                    scheme.epc_ratings = {"ratings": {}, "total": 0, "checked": True}
+                    db.commit()
             except Exception:
                 logger.exception(
                     "enrich_scheme_epc_failed",
@@ -653,7 +663,9 @@ def enrich_schemes_with_epc() -> dict[str, Any]:
                 errors += 1
                 db.rollback()
 
-        _run_async(scraper.close())
+        # Clean up scraper session if it was initialised.
+        if hasattr(scraper, "session") and scraper.session:
+            _run_async(scraper.session.aclose())
 
         result = {"processed": len(schemes), "enriched": enriched, "errors": errors}
         logger.info("enrich_schemes_with_epc_completed", **result)
@@ -905,6 +917,37 @@ def backfill_contract_dates() -> dict[str, Any]:
             try:
                 # Extract the description from raw_data JSON.
                 raw_data = contract.raw_data or {}
+
+                # If we have the full OCDS release stored, try structured
+                # extraction first (contracts→period, awards→contractPeriod)
+                raw_release = raw_data.get("raw_release")
+                if raw_release and isinstance(raw_release, dict):
+                    from app.scrapers.contracts_finder import ContractsFinderScraper
+                    s, e, _, _ = ContractsFinderScraper._extract_contract_details(raw_release)
+                    if s and e:
+                        contract_changed = False
+                        if contract.contract_start_date is None:
+                            contract.contract_start_date = s
+                            contract_changed = True
+                        if contract.contract_end_date is None:
+                            contract.contract_end_date = e
+                            contract_changed = True
+                        if contract_changed:
+                            updated += 1
+                            scheme = (
+                                db.query(ExistingScheme)
+                                .filter(ExistingScheme.id == contract.scheme_id)
+                                .first()
+                            )
+                            if scheme:
+                                if scheme.contract_start_date is None and contract.contract_start_date:
+                                    scheme.contract_start_date = contract.contract_start_date
+                                    schemes_updated += 1
+                                if scheme.contract_end_date is None and contract.contract_end_date:
+                                    scheme.contract_end_date = contract.contract_end_date
+                            db.commit()
+                        continue
+
                 description = raw_data.get("description", "")
                 if not description:
                     no_description += 1
@@ -1062,6 +1105,679 @@ def enrich_companies_charity_status() -> dict[str, Any]:
         }
         logger.info("enrich_charity_status_completed", **result_summary)
         return result_summary
+
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    name="app.tasks.enrichment_tasks.backfill_contract_dates_cf_awards",
+    acks_late=True,
+    soft_time_limit=900,
+    time_limit=1200,
+)
+def backfill_contract_dates_cf_awards() -> dict[str, Any]:
+    """Tier 1: Re-query the Contracts Finder API for award-stage releases and
+    cross-match with existing SchemeContract records to backfill missing dates.
+
+    The CF OCDS award-stage releases contain full ``contractPeriod`` objects
+    with ``startDate`` and ``endDate`` — information that is often absent from
+    the tender-stage data originally scraped.
+
+    For each existing contract sourced from ``contracts_finder``, we look up
+    its ``source_reference`` (the OCDS release ID) on the award API.  When a
+    match is found and it has contract period dates, we update the contract
+    and propagate to the parent scheme.
+
+    For contracts without a direct match (e.g. sourced from FAT), we run a
+    keyword search for award-stage releases and attempt fuzzy matching by
+    title + contracting authority.
+
+    Designed to run daily via Celery Beat.
+    """
+    db = _get_db()
+    try:
+        from app.models.models import ExistingScheme, SchemeContract
+
+        # ---- Phase A: Direct match for contracts_finder-sourced contracts ----
+        cf_contracts = (
+            db.query(SchemeContract)
+            .filter(
+                SchemeContract.source == "contracts_finder",
+                or_(
+                    SchemeContract.contract_start_date.is_(None),
+                    SchemeContract.contract_end_date.is_(None),
+                ),
+                SchemeContract.source_reference.isnot(None),
+            )
+            .all()
+        )
+
+        logger.info("backfill_cf_awards_phase_a", cf_contracts=len(cf_contracts))
+
+        phase_a_updated = 0
+        phase_a_errors = 0
+
+        if cf_contracts:
+            # Build a set of OCID prefixes to search for award releases
+            # CF release IDs look like: ocds-b5fd17-<uuid>-<stage>
+            # We need the base OCID without the stage suffix
+            from app.scrapers.contracts_finder import (
+                ContractsFinderScraper,
+                SEARCH_TERMS,
+            )
+
+            scraper = ContractsFinderScraper()
+
+            # Group contracts by their base OCID for batch lookup
+            ref_to_contracts: dict[str, list] = {}
+            for c in cf_contracts:
+                ref = c.source_reference or ""
+                # Normalize: strip stage suffix if present
+                base_ref = ref.rsplit("-", 1)[0] if ref.count("-") >= 4 else ref
+                ref_to_contracts.setdefault(base_ref, []).append(c)
+
+            # Search for award-stage releases matching these contracts
+            # We search in batches using the contract titles as keywords
+            try:
+                award_releases = _run_async(
+                    scraper.search_applications(
+                        stages="award",
+                        max_pages=100,
+                    )
+                )
+
+                logger.info(
+                    "backfill_cf_awards_fetched",
+                    award_releases=len(award_releases),
+                )
+
+                # Index awards by their base OCID
+                award_by_ref: dict[str, dict] = {}
+                for release in award_releases:
+                    rid = release.get("id", "")
+                    base_rid = rid.rsplit("-", 1)[0] if rid.count("-") >= 4 else rid
+                    # Also store by full ID
+                    award_by_ref[rid] = release
+                    award_by_ref[base_rid] = release
+
+                # Match and update
+                for base_ref, contracts in ref_to_contracts.items():
+                    award = award_by_ref.get(base_ref)
+                    if not award:
+                        # Try matching by full source_reference
+                        for c in contracts:
+                            award = award_by_ref.get(c.source_reference or "")
+                            if award:
+                                break
+                    if not award:
+                        continue
+
+                    # Extract dates from the award release
+                    start, end, _, _ = ContractsFinderScraper._extract_contract_details(award)
+
+                    if not start and not end:
+                        continue
+
+                    for contract in contracts:
+                        try:
+                            changed = False
+                            if contract.contract_start_date is None and start:
+                                contract.contract_start_date = start
+                                changed = True
+                            if contract.contract_end_date is None and end:
+                                contract.contract_end_date = end
+                                changed = True
+
+                            if changed:
+                                phase_a_updated += 1
+                                # Store the award data for audit
+                                existing_raw = dict(contract.raw_data or {})
+                                existing_raw["_cf_award_release"] = award.get("id", "")
+                                existing_raw["_date_source"] = "cf_award_api"
+                                contract.raw_data = existing_raw
+
+                                # Propagate to parent scheme
+                                _propagate_dates_to_scheme(db, contract)
+
+                                db.commit()
+                                logger.debug(
+                                    "backfill_cf_award_matched",
+                                    contract_id=contract.id,
+                                    start=str(start),
+                                    end=str(end),
+                                )
+                        except Exception:
+                            logger.exception(
+                                "backfill_cf_award_update_failed",
+                                contract_id=contract.id,
+                            )
+                            phase_a_errors += 1
+                            db.rollback()
+
+            except Exception as exc:
+                logger.exception("backfill_cf_awards_search_failed")
+                phase_a_errors += 1
+
+            try:
+                _run_async(scraper.close())
+            except Exception:
+                pass
+
+        # ---- Phase B: Title-based fuzzy match for FAT contracts ----
+        fat_contracts = (
+            db.query(SchemeContract)
+            .filter(
+                SchemeContract.source == "find_a_tender",
+                or_(
+                    SchemeContract.contract_start_date.is_(None),
+                    SchemeContract.contract_end_date.is_(None),
+                ),
+            )
+            .limit(200)
+            .all()
+        )
+
+        logger.info("backfill_cf_awards_phase_b", fat_contracts=len(fat_contracts))
+
+        phase_b_updated = 0
+        phase_b_errors = 0
+
+        if fat_contracts:
+            from app.scrapers.contracts_finder import ContractsFinderScraper
+
+            scraper = ContractsFinderScraper()
+
+            # Build title index from award releases (reuse if available)
+            try:
+                if not cf_contracts or 'award_releases' not in dir():
+                    award_releases = _run_async(
+                        scraper.search_applications(stages="award", max_pages=100)
+                    )
+
+                # Build a lookup by normalised title for fuzzy matching
+                import unicodedata
+
+                def _norm_title(t: str) -> str:
+                    t = t.lower().strip()
+                    t = re.sub(r"[^a-z0-9\s]", "", t)
+                    return re.sub(r"\s+", " ", t).strip()
+
+                award_by_title: dict[str, dict] = {}
+                for release in award_releases:
+                    title = release.get("tender", {}).get("title", "")
+                    if title:
+                        award_by_title[_norm_title(title)] = release
+
+                for contract in fat_contracts:
+                    try:
+                        raw = contract.raw_data or {}
+                        title = raw.get("title", "")
+                        if not title:
+                            continue
+
+                        norm = _norm_title(title)
+                        award = award_by_title.get(norm)
+
+                        if not award:
+                            # Try partial match — if the FAT title is a substring
+                            for at, ar in award_by_title.items():
+                                if norm in at or at in norm:
+                                    award = ar
+                                    break
+
+                        if not award:
+                            continue
+
+                        start, end, _, _ = ContractsFinderScraper._extract_contract_details(award)
+                        if not start and not end:
+                            continue
+
+                        changed = False
+                        if contract.contract_start_date is None and start:
+                            contract.contract_start_date = start
+                            changed = True
+                        if contract.contract_end_date is None and end:
+                            contract.contract_end_date = end
+                            changed = True
+
+                        if changed:
+                            phase_b_updated += 1
+                            existing_raw = dict(contract.raw_data or {})
+                            existing_raw["_cf_award_title_match"] = award.get("id", "")
+                            existing_raw["_date_source"] = "cf_award_title_match"
+                            contract.raw_data = existing_raw
+
+                            _propagate_dates_to_scheme(db, contract)
+                            db.commit()
+
+                    except Exception:
+                        logger.exception(
+                            "backfill_cf_award_fat_match_failed",
+                            contract_id=contract.id,
+                        )
+                        phase_b_errors += 1
+                        db.rollback()
+
+            except Exception:
+                logger.exception("backfill_cf_awards_phase_b_search_failed")
+                phase_b_errors += 1
+
+            try:
+                _run_async(scraper.close())
+            except Exception:
+                pass
+
+        result = {
+            "cf_contracts_scanned": len(cf_contracts),
+            "phase_a_updated": phase_a_updated,
+            "phase_a_errors": phase_a_errors,
+            "fat_contracts_scanned": len(fat_contracts),
+            "phase_b_updated": phase_b_updated,
+            "phase_b_errors": phase_b_errors,
+            "total_updated": phase_a_updated + phase_b_updated,
+        }
+        logger.info("backfill_contract_dates_cf_awards_completed", **result)
+        return result
+
+    finally:
+        db.close()
+
+
+def _propagate_dates_to_scheme(db: Session, contract) -> bool:
+    """Copy contract dates to the parent ExistingScheme if its dates are NULL.
+
+    Returns True if the scheme was updated.
+    """
+    from app.models.models import ExistingScheme
+
+    scheme = (
+        db.query(ExistingScheme)
+        .filter(ExistingScheme.id == contract.scheme_id)
+        .first()
+    )
+    if not scheme:
+        return False
+
+    changed = False
+    if scheme.contract_start_date is None and contract.contract_start_date:
+        scheme.contract_start_date = contract.contract_start_date
+        changed = True
+    if scheme.contract_end_date is None and contract.contract_end_date:
+        scheme.contract_end_date = contract.contract_end_date
+        changed = True
+    return changed
+
+
+@celery_app.task(
+    name="app.tasks.enrichment_tasks.backfill_dates_from_duration",
+    acks_late=True,
+)
+def backfill_dates_from_duration() -> dict[str, Any]:
+    """Tier 2: Compute end dates from start_date + duration mentioned in
+    description, and start dates from published_date + duration.
+
+    Targets contracts that have a start_date but no end_date (or vice versa)
+    where the description mentions a duration like "5 years" or "36 months".
+
+    Also handles the case where a contract has no start_date but has a
+    published_date or award date — uses that as a proxy for start and computes
+    end from duration.
+
+    Designed to run daily after the primary ``backfill_contract_dates`` task.
+    """
+    db = _get_db()
+    try:
+        from app.models.models import ExistingScheme, SchemeContract
+        from app.scrapers.date_extractor import (
+            _add_duration,
+            extract_contract_duration,
+        )
+
+        # ---- Case A: Has start_date, missing end_date, description has duration ----
+        contracts_no_end = (
+            db.query(SchemeContract)
+            .filter(
+                SchemeContract.contract_start_date.isnot(None),
+                SchemeContract.contract_end_date.is_(None),
+            )
+            .all()
+        )
+
+        logger.info("backfill_duration_case_a", contracts=len(contracts_no_end))
+
+        case_a_updated = 0
+        for contract in contracts_no_end:
+            raw = contract.raw_data or {}
+            desc = raw.get("description", "")
+            if not desc:
+                continue
+
+            duration_months = extract_contract_duration(desc)
+            if not duration_months:
+                continue
+
+            try:
+                end = _add_duration(contract.contract_start_date, duration_months, "month")
+                contract.contract_end_date = end
+
+                # Mark the source for audit
+                existing_raw = dict(contract.raw_data or {})
+                existing_raw["_date_source"] = existing_raw.get("_date_source", "") + ",duration_inference"
+                existing_raw["_inferred_duration_months"] = duration_months
+                contract.raw_data = existing_raw
+
+                _propagate_dates_to_scheme(db, contract)
+                db.commit()
+                case_a_updated += 1
+
+                logger.debug(
+                    "backfill_duration_end_computed",
+                    contract_id=contract.id,
+                    start=str(contract.contract_start_date),
+                    end=str(end),
+                    duration_months=duration_months,
+                )
+            except Exception:
+                logger.exception(
+                    "backfill_duration_case_a_failed",
+                    contract_id=contract.id,
+                )
+                db.rollback()
+
+        # ---- Case B: No start_date, no end_date, but has duration + published date ----
+        contracts_no_dates = (
+            db.query(SchemeContract)
+            .filter(
+                SchemeContract.contract_start_date.is_(None),
+                SchemeContract.contract_end_date.is_(None),
+            )
+            .all()
+        )
+
+        logger.info("backfill_duration_case_b", contracts=len(contracts_no_dates))
+
+        case_b_updated = 0
+        for contract in contracts_no_dates:
+            raw = contract.raw_data or {}
+            desc = raw.get("description", "")
+            if not desc:
+                continue
+
+            duration_months = extract_contract_duration(desc)
+            if not duration_months:
+                continue
+
+            # Try to find a proxy start date:
+            # 1. published_date from raw_data
+            # 2. award date from raw_data
+            # 3. created_at of the contract record
+            proxy_start = None
+
+            published = raw.get("published_date") or raw.get("publishedDate")
+            if published:
+                try:
+                    from app.scrapers.contracts_finder import ContractsFinderScraper
+                    proxy_start = ContractsFinderScraper._parse_iso_date(str(published))
+                except Exception:
+                    pass
+
+            if not proxy_start:
+                # Try award date
+                awards = raw.get("awards", [])
+                if isinstance(awards, list):
+                    for award in awards:
+                        award_date = award.get("date")
+                        if award_date:
+                            try:
+                                from app.scrapers.contracts_finder import ContractsFinderScraper
+                                proxy_start = ContractsFinderScraper._parse_iso_date(str(award_date))
+                                if proxy_start:
+                                    break
+                            except Exception:
+                                pass
+
+            if not proxy_start:
+                # Use created_at as last resort
+                if contract.created_at:
+                    proxy_start = contract.created_at.date() if hasattr(contract.created_at, 'date') else contract.created_at
+
+            if not proxy_start:
+                continue
+
+            try:
+                end = _add_duration(proxy_start, duration_months, "month")
+                contract.contract_start_date = proxy_start
+                contract.contract_end_date = end
+
+                existing_raw = dict(contract.raw_data or {})
+                existing_raw["_date_source"] = "published_date_plus_duration"
+                existing_raw["_inferred_duration_months"] = duration_months
+                existing_raw["_proxy_start_source"] = "published_date" if published else "created_at"
+                contract.raw_data = existing_raw
+
+                _propagate_dates_to_scheme(db, contract)
+                db.commit()
+                case_b_updated += 1
+
+                logger.debug(
+                    "backfill_duration_proxy_computed",
+                    contract_id=contract.id,
+                    proxy_start=str(proxy_start),
+                    end=str(end),
+                    duration_months=duration_months,
+                )
+            except Exception:
+                logger.exception(
+                    "backfill_duration_case_b_failed",
+                    contract_id=contract.id,
+                )
+                db.rollback()
+
+        result = {
+            "case_a_scanned": len(contracts_no_end),
+            "case_a_updated": case_a_updated,
+            "case_b_scanned": len(contracts_no_dates),
+            "case_b_updated": case_b_updated,
+            "total_updated": case_a_updated + case_b_updated,
+        }
+        logger.info("backfill_dates_from_duration_completed", **result)
+        return result
+
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# CPV-based typical duration map (months) — Tier 3
+# Based on UK public-sector contract norms by CPV code family.
+# ---------------------------------------------------------------------------
+CPV_TYPICAL_DURATIONS: dict[str, tuple[int, str]] = {
+    # Housing management — typically 5-7 year terms
+    "70332": (72, "housing_management"),       # Housing management services (owned)
+    "70333": (72, "housing_management"),       # Housing management services (rented)
+    "70330": (60, "property_management"),      # Property management
+    # Facilities management — 3-5 years
+    "79993": (48, "facilities_management"),    # Building and FM services
+    # Maintenance — 3-5 years
+    "50700": (48, "maintenance"),              # Building maintenance & repair
+    "45211": (36, "construction"),             # Construction of buildings
+    # Accommodation — 1-3 years
+    "98341": (24, "accommodation"),            # Accommodation services
+    "55100": (24, "hotel_accommodation"),      # Hotel services
+    "55200": (24, "camping"),                  # Camping/caravan sites
+    "55250": (24, "short_lets"),               # Short-let accommodation
+}
+
+# Keyword-based fallback durations when no CPV match
+KEYWORD_TYPICAL_DURATIONS: list[tuple[str, int, str]] = [
+    ("housing management", 72, "housing_management"),
+    ("tenant management", 72, "housing_management"),
+    ("estate management", 60, "property_management"),
+    ("property management", 60, "property_management"),
+    ("block management", 60, "property_management"),
+    ("facilities management", 48, "facilities_management"),
+    ("concierge", 36, "concierge"),
+    ("repairs and maintenance", 48, "maintenance"),
+    ("housing maintenance", 48, "maintenance"),
+    ("maintenance", 36, "maintenance"),
+    ("cleaning", 36, "cleaning"),
+    ("landscaping", 36, "landscaping"),
+    ("insurance", 24, "insurance"),
+    ("temporary accommodation", 24, "temporary_accommodation"),
+    ("student accommodation", 60, "student_accommodation"),
+    ("build to rent", 60, "btr_management"),
+    ("care home", 60, "care_home"),
+    ("supported housing", 60, "supported_housing"),
+    ("sheltered housing", 60, "sheltered_housing"),
+]
+
+
+@celery_app.task(
+    name="app.tasks.enrichment_tasks.estimate_contract_dates_cpv",
+    acks_late=True,
+)
+def estimate_contract_dates_cpv() -> dict[str, Any]:
+    """Tier 3: Estimate contract end dates using CPV-code or keyword-based
+    typical durations for the sector.
+
+    This is a last-resort heuristic for contracts that still have no dates
+    after Tier 1 (CF award API) and Tier 2 (duration extraction).
+
+    Estimated dates are flagged with ``_date_source: "cpv_estimate"`` and a
+    ``_date_confidence: "low"`` marker in ``raw_data`` so downstream systems
+    can treat them as estimates rather than confirmed dates.
+
+    Designed to run weekly via Celery Beat (after Tier 1 and 2 have run).
+    """
+    db = _get_db()
+    try:
+        from app.models.models import ExistingScheme, SchemeContract
+
+        # Only target contracts still missing end dates after Tiers 1 & 2
+        contracts = (
+            db.query(SchemeContract)
+            .filter(SchemeContract.contract_end_date.is_(None))
+            .all()
+        )
+
+        if not contracts:
+            logger.info("estimate_cpv_dates_none_found")
+            return {"scanned": 0, "estimated": 0}
+
+        logger.info("estimate_cpv_dates_found", count=len(contracts))
+
+        estimated = 0
+        no_match = 0
+
+        for contract in contracts:
+            raw = contract.raw_data or {}
+
+            # Try to determine typical duration
+            duration_months = None
+            duration_category = None
+
+            # Strategy A: CPV code match
+            cpv_codes = raw.get("cpv_codes", [])
+            if isinstance(cpv_codes, list):
+                for cpv in cpv_codes:
+                    cpv_prefix = str(cpv)[:5]
+                    if cpv_prefix in CPV_TYPICAL_DURATIONS:
+                        duration_months, duration_category = CPV_TYPICAL_DURATIONS[cpv_prefix]
+                        break
+
+            # Strategy B: Keyword match on title/description
+            if not duration_months:
+                title = raw.get("title", "")
+                desc = raw.get("description", "")
+                combined = f"{title} {desc}".lower()
+
+                for keyword, months, category in KEYWORD_TYPICAL_DURATIONS:
+                    if keyword in combined:
+                        duration_months = months
+                        duration_category = category
+                        break
+
+            if not duration_months:
+                no_match += 1
+                continue
+
+            # Determine a start date proxy
+            start = contract.contract_start_date
+            if not start:
+                # Try published date, award date, or created_at
+                published = raw.get("published_date") or raw.get("publishedDate")
+                if published:
+                    try:
+                        from app.scrapers.contracts_finder import ContractsFinderScraper
+                        start = ContractsFinderScraper._parse_iso_date(str(published))
+                    except Exception:
+                        pass
+
+                if not start:
+                    awards = raw.get("awards", [])
+                    if isinstance(awards, list):
+                        for award in awards:
+                            ad = award.get("date")
+                            if ad:
+                                try:
+                                    from app.scrapers.contracts_finder import ContractsFinderScraper
+                                    start = ContractsFinderScraper._parse_iso_date(str(ad))
+                                    if start:
+                                        break
+                                except Exception:
+                                    pass
+
+                if not start and contract.created_at:
+                    start = contract.created_at.date() if hasattr(contract.created_at, 'date') else contract.created_at
+
+            if not start:
+                no_match += 1
+                continue
+
+            try:
+                from app.scrapers.date_extractor import _add_duration
+
+                end = _add_duration(start, duration_months, "month")
+
+                if contract.contract_start_date is None:
+                    contract.contract_start_date = start
+                contract.contract_end_date = end
+
+                # Mark as estimate with low confidence
+                existing_raw = dict(contract.raw_data or {})
+                existing_raw["_date_source"] = "cpv_estimate"
+                existing_raw["_date_confidence"] = "low"
+                existing_raw["_estimated_duration_months"] = duration_months
+                existing_raw["_duration_category"] = duration_category
+                contract.raw_data = existing_raw
+
+                _propagate_dates_to_scheme(db, contract)
+                db.commit()
+                estimated += 1
+
+                logger.debug(
+                    "estimate_cpv_date_set",
+                    contract_id=contract.id,
+                    start=str(start),
+                    end=str(end),
+                    category=duration_category,
+                    duration_months=duration_months,
+                )
+            except Exception:
+                logger.exception(
+                    "estimate_cpv_date_failed",
+                    contract_id=contract.id,
+                )
+                db.rollback()
+
+        result = {
+            "scanned": len(contracts),
+            "estimated": estimated,
+            "no_cpv_keyword_match": no_match,
+        }
+        logger.info("estimate_contract_dates_cpv_completed", **result)
+        return result
 
     finally:
         db.close()
