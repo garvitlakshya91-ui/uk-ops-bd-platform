@@ -358,7 +358,22 @@
       "Bash(powershell -Command \"Get-CimInstance Win32_Process -Filter ''CommandLine LIKE \"\"%celery%\"\"'' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\")",
       "Bash(powershell -Command \"Start-Process python -ArgumentList ''-m'',''celery'',''-A'',''app.tasks:celery_app'',''worker'',''-l'',''info'',''-Q'',''default,scraping,enrichment,scoring'',''--pool=solo'' -NoNewWindow -RedirectStandardOutput celery_worker.log -RedirectStandardError celery_worker_err.log; Start-Process python -ArgumentList ''-m'',''celery'',''-A'',''app.tasks:celery_app'',''beat'',''-l'',''info'' -NoNewWindow -RedirectStandardOutput celery_beat.log -RedirectStandardError celery_beat_err.log; Write-Host ''Started''\")",
       "Bash(powershell.exe -ExecutionPolicy Bypass -Command \"Start-Process python -ArgumentList @\\(''-m'',''celery'',''-A'',''app.tasks:celery_app'',''worker'',''-l'',''info'',''-Q'',''default,scraping,enrichment,scoring'',''--pool=solo''\\) -NoNewWindow -RedirectStandardOutput celery_worker.log -RedirectStandardError celery_worker_err.log\")",
-      "Bash(powershell.exe -ExecutionPolicy Bypass -Command \"Start-Process python -ArgumentList @\\(''-m'',''celery'',''-A'',''app.tasks:celery_app'',''beat'',''-l'',''info''\\) -NoNewWindow -RedirectStandardOutput celery_beat.log -RedirectStandardError celery_beat_err.log\")"
+      "Bash(powershell.exe -ExecutionPolicy Bypass -Command \"Start-Process python -ArgumentList @\\(''-m'',''celery'',''-A'',''app.tasks:celery_app'',''beat'',''-l'',''info''\\) -NoNewWindow -RedirectStandardOutput celery_beat.log -RedirectStandardError celery_beat_err.log\")",
+      "Bash(where pg_dump)",
+      "Bash(powershell.exe -Command \"pg_dump -U postgres -h localhost -p 5432 -Fc uk_ops_bd -f ''C:\\\\Users\\\\garvi\\\\uk-ops-bd-platform\\\\backups\\\\uk_ops_bd_2026-04-05_213000.dump''\")",
+      "Read(//c/Program Files/PostgreSQL/**)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "Bash(powershell.exe -Command \"Get-Command pg_dump -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\")",
+      "Bash(PGPASSWORD=postgres \"/c/Program Files/PostgreSQL/18/bin/pg_dump.exe\" -U postgres -h localhost -p 5432 -Fc uk_ops_bd -f \"/c/Users/garvi/uk-ops-bd-platform/backups/uk_ops_bd_2026-04-05_213000.dump\")",
+      "Read(//c/Users/garvi/**)",
+      "Bash(tar -czf uk-ops-bd-platform-backup-2026-04-05.tar.gz --exclude='uk-ops-bd-platform/node_modules' --exclude='uk-ops-bd-platform/frontend/node_modules' --exclude='uk-ops-bd-platform/frontend/.next' --exclude='uk-ops-bd-platform/backups/*.dump' --exclude='uk-ops-bd-platform/.git' --exclude='*/__pycache__' --exclude='*.pyc' --exclude='uk-ops-bd-platform/backend/.env' --exclude='uk-ops-bd-platform/.env' uk-ops-bd-platform/)",
+      "Bash(python analyze_data_quality.py)",
+      "Bash(python enrich_all_gaps.py --step 1)",
+      "Bash(python enrich_all_gaps.py --step 11)",
+      "Bash(python enrich_all_gaps.py --step 13)",
+      "Bash(python enrich_all_gaps.py --step 12)",
+      "Bash(python enrich_all_gaps.py --step 14)",
+      "Bash(PGPASSWORD=postgres \"/c/Program Files/PostgreSQL/18/bin/pg_dump.exe\" -U postgres -h localhost -p 5432 -Fc uk_ops_bd -f \"/c/Users/garvi/uk-ops-bd-platform/backups/uk_ops_bd_2026-04-06_enriched.dump\")"
     ]
   }
 }
