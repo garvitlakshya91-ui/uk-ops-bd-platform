@@ -95,13 +95,21 @@ def _save_planning_applications(
                 # Update fields that may have changed.
                 _update_fields = [
                     "address", "postcode", "description", "applicant_name",
-                    "agent_name", "application_type", "status", "scheme_type",
-                    "num_units", "submission_date", "decision_date",
-                    "documents_url",
+                    "agent_name", "application_type", "status", "decision",
+                    "scheme_type", "total_units", "submitted_date",
+                    "validated_date", "decision_date",
+                    "consultation_end_date", "committee_date",
+                    "documents_url", "portal_url", "ward", "source",
+                    "is_btr", "is_pbsa", "is_affordable", "raw_data",
                 ]
                 changed = False
                 for field in _update_fields:
                     new_val = app_data.get(field)
+                    # Handle legacy field names from older scrapers
+                    if new_val is None and field == "total_units":
+                        new_val = app_data.get("num_units")
+                    if new_val is None and field == "submitted_date":
+                        new_val = app_data.get("submission_date")
                     if new_val and new_val != getattr(existing, field, None):
                         setattr(existing, field, new_val)
                         changed = True
@@ -118,12 +126,22 @@ def _save_planning_applications(
                     agent_name=app_data.get("agent_name"),
                     application_type=app_data.get("application_type"),
                     status=app_data.get("status"),
+                    decision=app_data.get("decision"),
                     scheme_type=app_data.get("scheme_type", "Unknown"),
-                    num_units=app_data.get("num_units"),
-                    submission_date=app_data.get("submission_date"),
+                    total_units=app_data.get("total_units") or app_data.get("num_units"),
+                    submitted_date=app_data.get("submitted_date") or app_data.get("submission_date"),
+                    validated_date=app_data.get("validated_date"),
                     decision_date=app_data.get("decision_date"),
+                    consultation_end_date=app_data.get("consultation_end_date"),
+                    committee_date=app_data.get("committee_date"),
                     documents_url=app_data.get("documents_url"),
-                    raw_html=app_data.get("raw_html"),
+                    portal_url=app_data.get("portal_url"),
+                    ward=app_data.get("ward"),
+                    source=app_data.get("source"),
+                    is_btr=app_data.get("is_btr", False),
+                    is_pbsa=app_data.get("is_pbsa", False),
+                    is_affordable=app_data.get("is_affordable", False),
+                    raw_data=app_data.get("raw_data"),
                 )
                 db.add(app)
                 new += 1
@@ -868,6 +886,371 @@ def refresh_scheme_data(self, scheme_id: int) -> dict[str, Any]:
         raise
     finally:
         db.close()
+
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.scraping_tasks.ingest_planit_applications",
+    max_retries=3,
+    default_retry_delay=600,
+    acks_late=True,
+    time_limit=3600,  # 1-hour hard limit — PlanIt has a lot of data
+    soft_time_limit=3000,
+)
+def ingest_planit_applications(
+    self,
+    days_back: int = 30,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, Any]:
+    """Ingest planning applications from the PlanIt API (planit.org.uk).
+
+    Fetches residential/BTR-relevant applications and all major applications
+    from the PlanIt aggregator, which covers 417 UK local authorities and
+    20M+ total applications.
+
+    Results are matched to existing councils by authority name and upserted
+    into the planning_applications table.
+
+    Parameters
+    ----------
+    days_back : int
+        Number of days to look back from today (default 30).  Ignored if
+        start_date/end_date are provided.
+    start_date : str | None
+        ISO-format start date (e.g. "2025-03-01").  Overrides days_back.
+    end_date : str | None
+        ISO-format end date (e.g. "2025-03-31").  Overrides days_back.
+
+    Returns
+    -------
+    dict
+        Summary with counts of applications fetched, new, updated, skipped.
+    """
+    from datetime import date as date_type
+
+    db = _get_db()
+    try:
+        logger.info(
+            "ingest_planit_started",
+            days_back=days_back,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        # Record the scraper run
+        run = ScraperRun(
+            council_id=None,
+            status="running",
+            applications_found=0,
+            applications_new=0,
+            applications_updated=0,
+            errors_count=0,
+        )
+        if hasattr(ScraperRun, "scraper_name"):
+            run.scraper_name = "planit_api"
+        db.add(run)
+        db.commit()
+
+        try:
+            from app.scrapers.planit_scraper import PlanItScraper
+
+            # Parse explicit date range if provided
+            parsed_start = None
+            parsed_end = None
+            if start_date:
+                parsed_start = date_type.fromisoformat(start_date)
+            if end_date:
+                parsed_end = date_type.fromisoformat(end_date)
+
+            scraper = PlanItScraper(
+                days_back=days_back,
+                start_date=parsed_start,
+                end_date=parsed_end,
+            )
+
+            # Run the scraper
+            raw_results = _run_async(_run_scraper(scraper))
+
+            logger.info(
+                "ingest_planit_fetched",
+                total_records=len(raw_results),
+            )
+
+            # Build a council name -> council_id lookup (case-insensitive)
+            all_councils = db.query(Council).all()
+            council_lookup: dict[str, int] = {}
+            for c in all_councils:
+                council_lookup[c.name.lower().strip()] = c.id
+
+            # Save results
+            stats = _save_planit_applications(db, raw_results, council_lookup)
+
+            run.applications_found = stats["found"]
+            run.applications_new = stats["new"]
+            run.applications_updated = stats["updated"]
+            run.errors_count = stats["errors"]
+            run.status = "success" if stats["errors"] == 0 else "partial"
+            run.completed_at = datetime.datetime.now(datetime.timezone.utc)
+            db.commit()
+
+            logger.info(
+                "ingest_planit_completed",
+                found=stats["found"],
+                new=stats["new"],
+                updated=stats["updated"],
+                skipped=stats["skipped"],
+                matched_councils=stats["matched_councils"],
+                unmatched_councils=stats["unmatched_councils"],
+                errors=stats["errors"],
+            )
+
+            return {
+                "status": run.status,
+                **stats,
+            }
+
+        except Exception as exc:
+            run.status = "failed"
+            run.completed_at = datetime.datetime.now(datetime.timezone.utc)
+            run.error_details = {"exception": str(exc)}
+            db.commit()
+
+            logger.exception("ingest_planit_failed")
+            raise self.retry(exc=exc)
+
+    finally:
+        db.close()
+
+
+def _normalise_authority_name(name: str) -> str:
+    """Normalise a PlanIt authority name for fuzzy matching to our council names.
+
+    PlanIt uses names like "London Borough of Camden" while our DB may store
+    "Camden" or "LB Camden".  This strips common prefixes/suffixes.
+    """
+    if not name:
+        return ""
+
+    n = name.lower().strip()
+
+    # Remove common prefixes
+    for prefix in (
+        "london borough of ",
+        "royal borough of ",
+        "city of ",
+        "borough of ",
+        "metropolitan borough of ",
+        "district of ",
+        "county of ",
+        "council of the ",
+        "the ",
+    ):
+        if n.startswith(prefix):
+            n = n[len(prefix):]
+            break
+
+    # Remove common suffixes
+    for suffix in (
+        " borough council",
+        " district council",
+        " city council",
+        " county council",
+        " metropolitan district council",
+        " metropolitan borough council",
+        " council",
+        " dc",
+        " bc",
+        " cc",
+        " mbc",
+        " mdc",
+    ):
+        if n.endswith(suffix):
+            n = n[: -len(suffix)]
+            break
+
+    return n.strip()
+
+
+def _resolve_council_id(
+    authority_name: str,
+    council_lookup: dict[str, int],
+    _cache: dict[str, int | None] = {},
+) -> int | None:
+    """Attempt to match a PlanIt authority_name to a council_id.
+
+    Tries exact match first, then normalised match, then substring match.
+    Results are cached within the run.
+    """
+    if authority_name in _cache:
+        return _cache[authority_name]
+
+    auth_lower = authority_name.lower().strip()
+
+    # 1. Exact match
+    if auth_lower in council_lookup:
+        _cache[authority_name] = council_lookup[auth_lower]
+        return _cache[authority_name]
+
+    # 2. Normalised match
+    norm_auth = _normalise_authority_name(authority_name)
+    for council_name, council_id in council_lookup.items():
+        norm_council = _normalise_authority_name(council_name)
+        if norm_auth == norm_council:
+            _cache[authority_name] = council_id
+            return council_id
+
+    # 3. Substring match (PlanIt name contains our council name or vice versa)
+    for council_name, council_id in council_lookup.items():
+        norm_council = _normalise_authority_name(council_name)
+        if len(norm_auth) >= 3 and len(norm_council) >= 3:
+            if norm_auth in norm_council or norm_council in norm_auth:
+                _cache[authority_name] = council_id
+                return council_id
+
+    _cache[authority_name] = None
+    return None
+
+
+def _save_planit_applications(
+    db: "Session",
+    results: list[dict[str, Any]],
+    council_lookup: dict[str, int],
+) -> dict[str, int]:
+    """Persist PlanIt scraper results to the planning_applications table.
+
+    Resolves authority_name to council_id and upserts by (reference, council_id).
+
+    Returns
+    -------
+    dict with keys: found, new, updated, skipped, errors,
+                    matched_councils, unmatched_councils
+    """
+    from app.models.models import PlanningApplication
+
+    found = len(results)
+    new = 0
+    updated = 0
+    skipped = 0
+    errors = 0
+    matched_council_names: set[str] = set()
+    unmatched_council_names: set[str] = set()
+
+    # Clear the council resolution cache for this run
+    _resolve_council_id.__defaults__[0].clear()  # type: ignore[union-attr]
+
+    batch_count = 0
+
+    for app_data in results:
+        try:
+            reference = app_data.get("reference", "")
+            if not reference:
+                errors += 1
+                continue
+
+            authority_name = app_data.pop("_authority_name", "")
+            council_id = _resolve_council_id(authority_name, council_lookup)
+
+            if council_id is None:
+                # Skip applications we cannot match to a council
+                unmatched_council_names.add(authority_name)
+                skipped += 1
+                continue
+
+            matched_council_names.add(authority_name)
+
+            existing = (
+                db.query(PlanningApplication)
+                .filter(
+                    PlanningApplication.reference == reference,
+                    PlanningApplication.council_id == council_id,
+                )
+                .first()
+            )
+
+            if existing:
+                # Update fields that may have changed
+                _update_fields = [
+                    "address", "postcode", "description", "application_type",
+                    "status", "decision_date", "submitted_date",
+                    "latitude", "longitude", "portal_url", "ward",
+                    "scheme_type", "total_units", "source",
+                    "is_btr", "is_pbsa", "is_affordable", "raw_data",
+                ]
+                changed = False
+                for field in _update_fields:
+                    new_val = app_data.get(field)
+                    if new_val is not None and new_val != getattr(existing, field, None):
+                        setattr(existing, field, new_val)
+                        changed = True
+                if changed:
+                    updated += 1
+            else:
+                app = PlanningApplication(
+                    reference=reference,
+                    council_id=council_id,
+                    address=app_data.get("address"),
+                    postcode=app_data.get("postcode"),
+                    description=app_data.get("description"),
+                    application_type=app_data.get("application_type"),
+                    status=app_data.get("status", "Unknown"),
+                    decision_date=app_data.get("decision_date"),
+                    submitted_date=app_data.get("submitted_date"),
+                    latitude=app_data.get("latitude"),
+                    longitude=app_data.get("longitude"),
+                    portal_url=app_data.get("portal_url"),
+                    ward=app_data.get("ward"),
+                    scheme_type=app_data.get("scheme_type", "Unknown"),
+                    total_units=app_data.get("total_units"),
+                    source="planit",
+                    is_btr=app_data.get("is_btr", False),
+                    is_pbsa=app_data.get("is_pbsa", False),
+                    is_affordable=app_data.get("is_affordable", False),
+                    raw_data=app_data.get("raw_data"),
+                )
+                db.add(app)
+                new += 1
+
+            batch_count += 1
+
+            # Commit in batches to avoid huge transactions
+            if batch_count >= 500:
+                db.commit()
+                batch_count = 0
+
+        except Exception:
+            logger.exception(
+                "save_planit_application_failed",
+                reference=app_data.get("reference"),
+            )
+            errors += 1
+            db.rollback()
+
+    # Final commit for remaining records
+    if batch_count > 0:
+        try:
+            db.commit()
+        except Exception:
+            logger.exception("save_planit_final_commit_failed")
+            errors += 1
+            db.rollback()
+
+    if unmatched_council_names:
+        logger.info(
+            "planit_unmatched_councils",
+            count=len(unmatched_council_names),
+            sample=sorted(unmatched_council_names)[:20],
+        )
+
+    return {
+        "found": found,
+        "new": new,
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors,
+        "matched_councils": len(matched_council_names),
+        "unmatched_councils": len(unmatched_council_names),
+    }
 
 
 # ---------------------------------------------------------------------------

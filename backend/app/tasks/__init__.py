@@ -27,6 +27,8 @@ celery_app.conf.update(
         "app.tasks.scraping_tasks.*": {"queue": "scraping"},
         "app.tasks.enrichment_tasks.*": {"queue": "enrichment"},
         "app.tasks.scoring_tasks.*": {"queue": "scoring"},
+        "app.tasks.developer_tracking_tasks.*": {"queue": "scraping"},
+        "app.tasks.data_source_tasks.*": {"queue": "scraping"},
     },
 )
 
@@ -161,6 +163,11 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=0, day_of_month="1", month_of_year="4"),
         "options": {"queue": "scraping"},
     },
+    "ingest-planit-applications-daily": {
+        "task": "app.tasks.scraping_tasks.ingest_planit_applications",
+        "schedule": crontab(hour=1, minute=30),
+        "options": {"queue": "scraping"},
+    },
     "enrich-companies-charity-weekly": {
         "task": "app.tasks.enrichment_tasks.enrich_companies_charity_status",
         "schedule": crontab(hour=6, minute=0, day_of_week="saturday"),
@@ -171,10 +178,51 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=5, minute=30, day_of_week="sunday"),
         "options": {"queue": "enrichment"},
     },
+    # Developer SPV tracking and land ownership
+    "track-developer-spvs-weekly": {
+        "task": "app.tasks.developer_tracking_tasks.track_developer_spvs",
+        "schedule": crontab(hour=1, minute=0, day_of_week="sunday"),
+        "options": {"queue": "scraping"},
+    },
+    "ingest-ccod-ownership-monthly": {
+        "task": "app.tasks.developer_tracking_tasks.ingest_land_registry_ccod_ownership",
+        "schedule": crontab(hour=2, minute=0, day_of_month="10"),
+        "options": {"queue": "scraping"},
+    },
+    "enrich-company-ownership-weekly": {
+        "task": "app.tasks.developer_tracking_tasks.enrich_company_ownership",
+        "schedule": crontab(hour=3, minute=0, day_of_week="monday"),
+        "options": {"queue": "enrichment"},
+    },
+    "scan-new-property-incorporations-weekly": {
+        "task": "app.tasks.developer_tracking_tasks.scan_new_property_incorporations",
+        "schedule": crontab(hour=1, minute=30, day_of_week="sunday"),
+        "options": {"queue": "scraping"},
+    },
+    # ------------------------------------------------------------------
+    # New data source integrations
+    # ------------------------------------------------------------------
+    "ingest-price-paid-monthly": {
+        "task": "app.tasks.data_source_tasks.ingest_price_paid_data",
+        "schedule": crontab(hour=1, minute=30, day_of_month="10"),
+        "options": {"queue": "scraping"},
+    },
+    "ingest-gla-planning-daily": {
+        "task": "app.tasks.data_source_tasks.ingest_gla_planning",
+        "schedule": crontab(hour=2, minute=50),
+        "options": {"queue": "scraping"},
+    },
+    "ingest-bpf-btr-pipeline-quarterly": {
+        "task": "app.tasks.data_source_tasks.ingest_bpf_btr_pipeline",
+        "schedule": crontab(hour=3, minute=30, day_of_month="1", month_of_year="1,4,7,10"),
+        "options": {"queue": "scraping"},
+    },
 }
 
 celery_app.autodiscover_tasks([
     "app.tasks.scraping_tasks",
     "app.tasks.enrichment_tasks",
     "app.tasks.scoring_tasks",
+    "app.tasks.developer_tracking_tasks",
+    "app.tasks.data_source_tasks",
 ])

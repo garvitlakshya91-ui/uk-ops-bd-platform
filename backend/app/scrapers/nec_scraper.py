@@ -6,11 +6,20 @@ by several UK councils. It uses a distinct URL structure with ASPX pages,
 ViewState-based form submission, and table-based result layouts.
 
 Typical URL: {base_url}/Northgate/PlanningExplorer/GeneralSearch.aspx
+
+This scraper supports two search strategies:
+1. **Date-range search** (primary) — fetches ALL applications received in a
+   date window, optionally filtered by application type.  This is the main
+   mode used for regular scraping runs and ensures no applications are missed.
+2. **Keyword search** (supplementary) — searches by BD-relevant keywords to
+   find applications whose descriptions mention specific scheme types.
+
+Both strategies are combined in ``search_applications`` with deduplication
+by reference number.
 """
 
 from __future__ import annotations
 
-import asyncio
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -20,7 +29,7 @@ from urllib.parse import urljoin
 import structlog
 from bs4 import BeautifulSoup, NavigableString, Tag
 
-from app.scrapers.base import BaseScraper
+from app.scrapers.base import BaseScraper, ScraperMetrics
 
 logger = structlog.get_logger(__name__)
 
@@ -34,6 +43,10 @@ class NECCouncilConfig:
     search_path: str = "/Northgate/PlanningExplorer/GeneralSearch.aspx"
     results_path: str = "/Northgate/PlanningExplorer/PLEResultList.aspx"
     detail_path: str = "/Northgate/PlanningExplorer/Generic/StdDetails.aspx"
+    # Application type codes to search when doing date-range searches.
+    # Empty list means search all types (no filter).  Codes are portal-
+    # specific and detected at runtime from the <select> options.
+    application_type_codes: list[str] = field(default_factory=list)
     extra_params: dict[str, str] = field(default_factory=dict)
 
 
@@ -79,6 +92,7 @@ NEC_COUNCILS: list[NECCouncilConfig] = [
     # Waltham Forest → API (old NEC portal is dead)
 ]
 
+# Keywords used for supplementary BD-focused keyword searches.
 SEARCH_KEYWORDS: list[str] = [
     "build to rent",
     "BTR",
@@ -92,6 +106,44 @@ SEARCH_KEYWORDS: list[str] = [
     "apartments",
 ]
 
+# Application types that are relevant for BD purposes.  These are matched
+# (case-insensitive substring) against the <option> text in the application
+# type dropdown to auto-detect the correct codes per portal.
+BD_RELEVANT_APP_TYPES: list[str] = [
+    "full planning",
+    "outline",
+    "reserved matters",
+    "major",
+    "full application",
+    "full permission",
+    "prior notification",
+    "permission in principle",
+    "hybrid",
+    "environmental impact",
+    "screening",
+    "scoping",
+]
+
+# Application types to skip during residential filtering — these are very
+# unlikely to be BD-relevant and produce noise.
+SKIP_APP_TYPES: list[str] = [
+    "householder",
+    "tree",
+    "hedge",
+    "advertisement",
+    "telecoms",
+    "listed building",
+    "conservation area",
+    "lawful development",
+    "discharge of condition",
+    "non-material amendment",
+    "certificate of lawfulness",
+]
+
+# Minimum number of units (from description) for an application to be
+# considered BD-relevant when doing broad date-range searches.
+MIN_UNITS_BD_RELEVANT = 5
+
 
 class NECScraper(BaseScraper):
     """
@@ -100,6 +152,20 @@ class NECScraper(BaseScraper):
     These portals use ASP.NET WebForms with ViewState and postback-based
     navigation. Results are displayed in table grids with ASPX-style
     paging controls.
+
+    The scraper uses two complementary search strategies:
+
+    1. **Date-range search** — fetches all applications received within a
+       configurable window (default: last 28 days).  For portals that
+       support application-type filtering, it focuses on full/outline/major
+       types.  This ensures we capture every new planning application.
+
+    2. **Keyword search** — supplements the date-range search by searching
+       for BD-specific terms (BTR, PBSA, etc.) over a longer lookback
+       period (default: 180 days).  This catches older applications that
+       may have been missed or recently updated.
+
+    Results from both strategies are deduplicated by reference number.
     """
 
     def __init__(
@@ -119,6 +185,10 @@ class NECScraper(BaseScraper):
         self._viewstate: str = ""
         self._viewstate_generator: str = ""
         self._event_validation: str = ""
+        # Detected form field names (populated on first search page load)
+        self._form_fields: dict[str, str] = {}
+        # Detected application type options: {code: display_text}
+        self._app_type_options: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # ASP.NET state
@@ -171,6 +241,51 @@ class NECScraper(BaseScraper):
                 "csbtnSearch",
                 "ctl00$MainBodyContent$csbtnSearch",
             ],
+            "app_type": [
+                "cboApplicationTypeCode",
+                "ctl00$MainBodyContent$cboApplicationTypeCode",
+                "ctl00$MainBodyContent$ddlApplicationType",
+            ],
+            "status_code": [
+                "cboStatusCode",
+                "ctl00$MainBodyContent$cboStatusCode",
+                "ctl00$MainBodyContent$ddlStatus",
+            ],
+            "date_type": [
+                "cboSelectDateValue",
+                "ctl00$MainBodyContent$cboSelectDateValue",
+                "ctl00$MainBodyContent$ddlDateType",
+            ],
+            "site_address": [
+                "txtSiteAddress",
+                "ctl00$MainBodyContent$txtSiteAddress",
+                "ctl00$MainBodyContent$txtAddress",
+            ],
+            "applicant_name": [
+                "txtApplicantName",
+                "ctl00$MainBodyContent$txtApplicantName",
+            ],
+            "agent_name": [
+                "txtAgentName",
+                "ctl00$MainBodyContent$txtAgentName",
+            ],
+            "app_number": [
+                "txtAppNumber",
+                "ctl00$MainBodyContent$txtAppNumber",
+                "ctl00$MainBodyContent$txtApplicationNumber",
+            ],
+            "ward": [
+                "cboWardCode",
+                "ctl00$MainBodyContent$cboWardCode",
+            ],
+            "constituency": [
+                "cboConstituencyCode",
+                "ctl00$MainBodyContent$cboConstituencyCode",
+            ],
+            "dev_type": [
+                "cboDevelopmentTypeCode",
+                "ctl00$MainBodyContent$cboDevelopmentTypeCode",
+            ],
         }
 
         detected: dict[str, str] = {}
@@ -193,6 +308,65 @@ class NECScraper(BaseScraper):
         )
         return detected
 
+    def _detect_app_type_options(self, html: str) -> dict[str, str]:
+        """Extract available application type options from the search form.
+
+        Returns a dict mapping option value (code) to display text, e.g.:
+        {"FUL": "Full Planning", "OUT": "Outline Permission", ...}
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        options: dict[str, str] = {}
+
+        # Find the application type <select> element
+        field_name = self._form_fields.get("app_type", "cboApplicationTypeCode")
+        select_el = soup.find("select", {"name": field_name})
+        if not select_el or not isinstance(select_el, Tag):
+            return options
+
+        for opt in select_el.find_all("option"):
+            if not isinstance(opt, Tag):
+                continue
+            value = str(opt.get("value", "")).strip()
+            text = opt.get_text(strip=True)
+            if value and text:
+                options[value] = text
+
+        self.log.debug(
+            "nec_app_type_options",
+            count=len(options),
+            council=self.council_name,
+        )
+        return options
+
+    def _get_bd_relevant_type_codes(self) -> list[str]:
+        """Return application type codes that are relevant for BD.
+
+        Matches detected portal options against BD_RELEVANT_APP_TYPES
+        keywords.  If the config specifies explicit codes, use those instead.
+        """
+        if self.config.application_type_codes:
+            return self.config.application_type_codes
+
+        if not self._app_type_options:
+            return []
+
+        relevant_codes: list[str] = []
+        for code, text in self._app_type_options.items():
+            text_lower = text.lower()
+            # Skip types we know are irrelevant
+            if any(skip in text_lower for skip in SKIP_APP_TYPES):
+                continue
+            # Include types that match BD-relevant patterns
+            if any(kw in text_lower for kw in BD_RELEVANT_APP_TYPES):
+                relevant_codes.append(code)
+
+        self.log.info(
+            "nec_bd_relevant_types",
+            codes=relevant_codes,
+            council=self.council_name,
+        )
+        return relevant_codes
+
     def _build_url(self, path: str) -> str:
         return f"{self.config.base_url.rstrip('/')}{path}"
 
@@ -206,11 +380,39 @@ class NECScraper(BaseScraper):
         date_from: date | None = None,
         date_to: date | None = None,
         keywords: list[str] | None = None,
-        max_pages: int = 10,
+        max_pages: int = 20,
+        keyword_lookback_days: int = 180,
+        date_range_lookback_days: int = 28,
+        skip_keyword_search: bool = False,
+        skip_date_range_search: bool = False,
+        application_type_code: str | None = None,
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
-        if date_from is None:
-            date_from = date.today() - timedelta(days=90)
+        """Search for planning applications using combined strategies.
+
+        Parameters
+        ----------
+        date_from : date, optional
+            Start of date range for the primary date-range search.
+            Defaults to ``date_range_lookback_days`` ago.
+        date_to : date, optional
+            End of date range.  Defaults to today.
+        keywords : list[str], optional
+            Keywords for supplementary keyword search.
+            Defaults to ``SEARCH_KEYWORDS``.
+        max_pages : int
+            Maximum result pages to paginate through per search.
+        keyword_lookback_days : int
+            How far back to look for keyword searches (default 180 days).
+        date_range_lookback_days : int
+            How far back to look for date-range searches (default 28 days).
+        skip_keyword_search : bool
+            If True, skip the keyword search strategy entirely.
+        skip_date_range_search : bool
+            If True, skip the date-range search strategy entirely.
+        application_type_code : str, optional
+            If set, restrict date-range search to this specific app type code.
+        """
         if date_to is None:
             date_to = date.today()
         if keywords is None:
@@ -219,37 +421,204 @@ class NECScraper(BaseScraper):
         all_results: list[dict[str, Any]] = []
         seen_refs: set[str] = set()
 
-        # Load search page to get initial ASP.NET state and detect form fields
+        # Load search page to get initial ASP.NET state and detect fields
         search_url = self._build_url(self.config.search_path)
         init_resp = await self.fetch(search_url, use_cache=False)
         self._extract_aspnet_state(init_resp.text)
         self._form_fields = self._detect_form_fields(init_resp.text)
+        self._app_type_options = self._detect_app_type_options(init_resp.text)
 
-        for keyword in keywords:
-            self.log.info(
-                "nec_keyword_search",
-                keyword=keyword,
-                council=self.council_name,
-            )
-            try:
-                results = await self._search_keyword(
-                    keyword, date_from, date_to, max_pages
+        # ------------------------------------------------------------------
+        # Strategy 1: Date-range search (primary)
+        # Fetches ALL applications received within the date window.
+        # If application-type filtering is available, restricts to
+        # BD-relevant types to reduce noise.
+        # ------------------------------------------------------------------
+        if not skip_date_range_search:
+            dr_from = date_from or (date_to - timedelta(days=date_range_lookback_days))
+
+            if application_type_code:
+                # Single specific type requested
+                type_codes = [application_type_code]
+            else:
+                type_codes = self._get_bd_relevant_type_codes()
+
+            if type_codes:
+                # Search each relevant application type separately
+                for type_code in type_codes:
+                    self.log.info(
+                        "nec_date_range_search",
+                        app_type=type_code,
+                        date_from=str(dr_from),
+                        date_to=str(date_to),
+                        council=self.council_name,
+                    )
+                    try:
+                        # Re-load search page to get fresh ViewState
+                        init_resp = await self.fetch(search_url, use_cache=False)
+                        self._extract_aspnet_state(init_resp.text)
+
+                        results = await self._search_date_range(
+                            dr_from, date_to, max_pages,
+                            application_type_code=type_code,
+                        )
+                        for r in results:
+                            ref = r.get("reference", "")
+                            if ref and ref not in seen_refs:
+                                seen_refs.add(ref)
+                                all_results.append(r)
+                    except Exception as exc:
+                        self.metrics.record_error(
+                            exc, context=f"nec_date_range:{type_code}"
+                        )
+                        self.log.warning(
+                            "nec_date_range_search_failed",
+                            app_type=type_code,
+                            error=str(exc),
+                        )
+            else:
+                # No type codes detected — search without type filter
+                self.log.info(
+                    "nec_date_range_search_all_types",
+                    date_from=str(dr_from),
+                    date_to=str(date_to),
+                    council=self.council_name,
                 )
-                for r in results:
-                    ref = r.get("reference", "")
-                    if ref and ref not in seen_refs:
-                        seen_refs.add(ref)
-                        all_results.append(r)
-            except Exception as exc:
-                self.metrics.record_error(exc, context=f"nec_keyword:{keyword}")
-                self.log.warning(
-                    "nec_search_failed",
+                try:
+                    init_resp = await self.fetch(search_url, use_cache=False)
+                    self._extract_aspnet_state(init_resp.text)
+
+                    results = await self._search_date_range(
+                        dr_from, date_to, max_pages,
+                    )
+                    for r in results:
+                        ref = r.get("reference", "")
+                        if ref and ref not in seen_refs:
+                            seen_refs.add(ref)
+                            all_results.append(r)
+                except Exception as exc:
+                    self.metrics.record_error(exc, context="nec_date_range:all")
+                    self.log.warning(
+                        "nec_date_range_search_failed",
+                        error=str(exc),
+                    )
+
+        # ------------------------------------------------------------------
+        # Strategy 2: Keyword search (supplementary)
+        # Searches for BD-relevant keywords over a longer lookback period.
+        # ------------------------------------------------------------------
+        if not skip_keyword_search:
+            kw_from = date_from or (date_to - timedelta(days=keyword_lookback_days))
+
+            for keyword in keywords:
+                self.log.info(
+                    "nec_keyword_search",
                     keyword=keyword,
-                    error=str(exc),
+                    council=self.council_name,
                 )
+                try:
+                    # Re-load search page for fresh ViewState
+                    init_resp = await self.fetch(search_url, use_cache=False)
+                    self._extract_aspnet_state(init_resp.text)
 
+                    results = await self._search_keyword(
+                        keyword, kw_from, date_to, max_pages
+                    )
+                    for r in results:
+                        ref = r.get("reference", "")
+                        if ref and ref not in seen_refs:
+                            seen_refs.add(ref)
+                            all_results.append(r)
+                except Exception as exc:
+                    self.metrics.record_error(exc, context=f"nec_keyword:{keyword}")
+                    self.log.warning(
+                        "nec_search_failed",
+                        keyword=keyword,
+                        error=str(exc),
+                    )
+
+        self.log.info(
+            "nec_search_complete",
+            total_unique=len(all_results),
+            council=self.council_name,
+        )
         self.metrics.applications_found = len(all_results)
         return all_results
+
+    # ------------------------------------------------------------------
+    # Date-range search (no keyword, optional type filter)
+    # ------------------------------------------------------------------
+
+    async def _search_date_range(
+        self,
+        date_from: date,
+        date_to: date,
+        max_pages: int,
+        application_type_code: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search by date range, optionally filtered by application type.
+
+        This is the primary search strategy that catches all planning
+        applications received in the given window.  Unlike keyword search,
+        it does not require a proposal text — it uses the date fields and
+        optionally the application type dropdown.
+        """
+        results: list[dict[str, Any]] = []
+        search_url = self._build_url(self.config.search_path)
+
+        fields = self._form_fields
+        is_northgate = fields.get("proposal") == "txtProposal"
+
+        form_data: dict[str, str] = {
+            "__VIEWSTATE": self._viewstate,
+            "__VIEWSTATEGENERATOR": self._viewstate_generator,
+            "__EVENTVALIDATION": self._event_validation,
+            # Leave proposal/keyword empty — date range is the filter
+            fields.get("proposal", "ctl00$MainBodyContent$txtProposal"): "",
+            fields.get("date_from", "ctl00$MainBodyContent$txtDateReceivedFrom"): date_from.strftime("%d/%m/%Y"),
+            fields.get("date_to", "ctl00$MainBodyContent$txtDateReceivedTo"): date_to.strftime("%d/%m/%Y"),
+            fields.get("search_btn", "ctl00$MainBodyContent$btnSearch"): "Search",
+        }
+
+        # Set application type filter if specified
+        if application_type_code:
+            form_data[fields.get("app_type", "cboApplicationTypeCode")] = application_type_code
+
+        # For Northgate-style portals, add required form defaults
+        if is_northgate:
+            form_data.update({
+                "rbGroup": "rbRange",
+                "edrDateSelection": "",
+                "cboSelectDateValue": "DATE_RECEIVED",
+                "cboStatusCode": "",
+                "cboConstituencyCode": "",
+                "cboWardCode": "",
+                "cboDevelopmentTypeCode": "",
+            })
+            # Only set app type if not already set above
+            if not application_type_code:
+                form_data.setdefault("cboApplicationTypeCode", "")
+
+        form_data.update(self.config.extra_params)
+
+        resp = await self._submit_search_form(search_url, form_data, is_northgate)
+        current_results_url = str(resp.url) if hasattr(resp, "url") else search_url
+
+        results = await self._paginate_results(
+            resp, search_url, current_results_url, max_pages
+        )
+
+        self.log.info(
+            "nec_date_range_results",
+            count=len(results),
+            app_type=application_type_code or "all",
+            council=self.council_name,
+        )
+        return results
+
+    # ------------------------------------------------------------------
+    # Keyword search
+    # ------------------------------------------------------------------
 
     async def _search_keyword(
         self,
@@ -261,9 +630,9 @@ class NECScraper(BaseScraper):
         results: list[dict[str, Any]] = []
         search_url = self._build_url(self.config.search_path)
 
-        # Use auto-detected form field names (handles both ASP.NET and
-        # plain Northgate naming conventions)
-        fields = getattr(self, "_form_fields", {})
+        fields = self._form_fields
+        is_northgate = fields.get("proposal") == "txtProposal"
+
         form_data: dict[str, str] = {
             "__VIEWSTATE": self._viewstate,
             "__VIEWSTATEGENERATOR": self._viewstate_generator,
@@ -274,10 +643,7 @@ class NECScraper(BaseScraper):
             fields.get("search_btn", "ctl00$MainBodyContent$btnSearch"): "Search",
         }
 
-        # For Northgate/PlanningExplorer portals (detected by simple field
-        # names like 'txtProposal'), add the date-range radio selector and
-        # empty select defaults that the form requires.
-        if fields.get("proposal") == "txtProposal":
+        if is_northgate:
             form_data.update({
                 "rbGroup": "rbRange",
                 "edrDateSelection": "",
@@ -291,12 +657,29 @@ class NECScraper(BaseScraper):
 
         form_data.update(self.config.extra_params)
 
-        # Northgate portals redirect POST → 302 → results page.
-        # The results page requires the Referer header to load properly.
-        # We disable auto-redirect and follow manually with proper headers.
-        is_northgate = fields.get("proposal") == "txtProposal"
+        resp = await self._submit_search_form(search_url, form_data, is_northgate)
+        current_results_url = str(resp.url) if hasattr(resp, "url") else search_url
 
+        results = await self._paginate_results(
+            resp, search_url, current_results_url, max_pages
+        )
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Form submission helper
+    # ------------------------------------------------------------------
+
+    async def _submit_search_form(
+        self,
+        search_url: str,
+        form_data: dict[str, str],
+        is_northgate: bool,
+    ) -> Any:
+        """Submit the search form, handling Northgate redirect behaviour."""
         if is_northgate and self.session:
+            # Northgate portals redirect POST -> 302 -> results page.
+            # We disable auto-redirect and follow manually with proper headers.
             raw_resp = await self.session.request(
                 "POST",
                 search_url,
@@ -314,17 +697,15 @@ class NECScraper(BaseScraper):
                 redirect_url = raw_resp.headers.get("location", "")
                 if redirect_url:
                     redirect_url = urljoin(self.config.base_url, redirect_url)
-                    resp = await self.fetch(
+                    return await self.fetch(
                         redirect_url,
                         headers={"Referer": search_url},
                         use_cache=False,
                     )
-                else:
-                    resp = raw_resp
-            else:
-                resp = raw_resp
+                return raw_resp
+            return raw_resp
         else:
-            resp = await self.fetch(
+            return await self.fetch(
                 search_url,
                 method="POST",
                 data=form_data,
@@ -335,11 +716,25 @@ class NECScraper(BaseScraper):
                 use_cache=False,
             )
 
-        # Track the URL of the results page for correct relative URL resolution
-        current_results_url = str(resp.url) if hasattr(resp, "url") else search_url
+    # ------------------------------------------------------------------
+    # Pagination helper
+    # ------------------------------------------------------------------
+
+    async def _paginate_results(
+        self,
+        initial_resp: Any,
+        search_url: str,
+        results_url: str,
+        max_pages: int,
+    ) -> list[dict[str, Any]]:
+        """Parse results from the initial response and paginate through."""
+        results: list[dict[str, Any]] = []
+        resp = initial_resp
 
         for page_num in range(1, max_pages + 1):
-            page_results = self._parse_results_page(resp.text, results_url=current_results_url)
+            page_results = self._parse_results_page(
+                resp.text, results_url=results_url
+            )
             if not page_results:
                 break
 
@@ -348,6 +743,7 @@ class NECScraper(BaseScraper):
                 "nec_results_page",
                 page=page_num,
                 count=len(page_results),
+                total_so_far=len(results),
             )
 
             # Handle ASP.NET GridView paging
@@ -453,10 +849,6 @@ class NECScraper(BaseScraper):
             detail_url = ""
             if link and isinstance(link, Tag):
                 ref_text = link.get_text(strip=True)
-                # Use the results page URL as base for relative links,
-                # falling back to the config base_url.  This handles
-                # Northgate portals where detail links are relative to
-                # the /Northgate/PlanningExplorer/Generic/ path.
                 base_for_join = results_url or self.config.base_url
                 detail_url = urljoin(
                     base_for_join, str(link.get("href", ""))
@@ -471,6 +863,8 @@ class NECScraper(BaseScraper):
                     "address": self._safe_index(cell_texts, col_map.get("address", 1)),
                     "description": self._safe_index(cell_texts, col_map.get("description", 2)),
                     "status": self._safe_index(cell_texts, col_map.get("status", 3)),
+                    "application_type": self._safe_index(cell_texts, col_map.get("app_type", -1)),
+                    "date_received": self._safe_index(cell_texts, col_map.get("date_received", -1)),
                 }
             )
 
@@ -500,6 +894,10 @@ class NECScraper(BaseScraper):
                 mapping["description"] = idx
             elif "status" in text or "decision" in text:
                 mapping["status"] = idx
+            elif "type" in text and "app" in text:
+                mapping["app_type"] = idx
+            elif "received" in text or "registered" in text:
+                mapping["date_received"] = idx
 
         return {**default, **mapping}
 
@@ -582,18 +980,32 @@ class NECScraper(BaseScraper):
         description = kv.get("proposal") or kv.get("description") or ""
         applicant = kv.get("applicant") or kv.get("applicant name") or ""
         # Skip values that look like planning references
-        # (e.g. "2024/12345/PA", "PA/2024/0123", "DC/24/00123")
         if applicant and re.search(r"\d+/|/\d+", applicant):
             applicant = ""
         agent = kv.get("agent") or kv.get("agent name") or ""
         app_type = kv.get("application type") or kv.get("type") or ""
         status = kv.get("status") or kv.get("decision") or ""
+        ward = kv.get("ward") or kv.get("ward name") or ""
+        decision = kv.get("decision") or kv.get("decision type") or ""
 
         date_received = _parse_dt(
             kv.get("date received") or kv.get("received") or kv.get("registered") or ""
         )
+        date_validated = _parse_dt(
+            kv.get("date validated") or kv.get("validated") or ""
+        )
         decision_date = _parse_dt(
             kv.get("decision date") or kv.get("decided") or ""
+        )
+        consultation_end = _parse_dt(
+            kv.get("consultation expiry") or kv.get("neighbour expiry") or
+            kv.get("consultation end") or ""
+        )
+        committee_date = _parse_dt(
+            kv.get("committee date") or kv.get("committee") or ""
+        )
+        target_date = _parse_dt(
+            kv.get("target date") or kv.get("target decision date") or ""
         )
 
         docs_link = soup.find("a", string=re.compile(r"document", re.IGNORECASE))
@@ -609,52 +1021,174 @@ class NECScraper(BaseScraper):
             "agent_name": agent,
             "application_type": app_type,
             "status": status,
+            "ward": ward,
+            "decision": decision,
             "submission_date": date_received,
+            "validated_date": date_validated,
             "decision_date": decision_date,
+            "consultation_end_date": consultation_end,
+            "committee_date": committee_date,
+            "target_date": target_date,
             "documents_url": documents_url,
             "detail_url": detail_url,
             "raw_kv": kv,
         }
 
     # ------------------------------------------------------------------
-    # Parse
+    # Residential relevance check
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_residential_relevant(app_data: dict[str, Any]) -> bool:
+        """Check whether an application is likely residential/BD-relevant.
+
+        Used to filter results from broad date-range searches.  Applications
+        found via keyword search are assumed relevant and bypass this check.
+        """
+        description = (app_data.get("description") or "").lower()
+        app_type = (app_data.get("application_type") or "").lower()
+
+        # Skip clearly non-residential types
+        for skip_kw in SKIP_APP_TYPES:
+            if skip_kw in app_type:
+                return False
+
+        # Positive signals: residential keywords in description
+        residential_keywords = [
+            "residential", "dwelling", "flat", "apartment", "house",
+            "housing", "home", "bungalow", "maisonette", "bedroom",
+            "bed ", "unit", "storey", "mixed use", "mixed-use",
+            "build to rent", "btr", "student", "pbsa", "co-living",
+            "retirement", "extra care", "assisted living", "senior",
+            "affordable", "social rent", "shared ownership",
+        ]
+        for kw in residential_keywords:
+            if kw in description:
+                return True
+
+        # Applications with extracted unit counts are relevant
+        unit_count = BaseScraper.extract_unit_count(app_data.get("description"))
+        if unit_count and unit_count >= MIN_UNITS_BD_RELEVANT:
+            return True
+
+        # Major/large-scale applications are worth reviewing
+        if any(kw in app_type for kw in ["major", "full planning", "outline", "hybrid"]):
+            return True
+
+        return False
+
+    # ------------------------------------------------------------------
+    # Parse application
     # ------------------------------------------------------------------
 
     async def parse_application(self, raw: dict[str, Any]) -> dict[str, Any]:
-        detail_url = raw.get("detail_url", "")
-        detail: dict[str, Any] = {}
+        """Convert raw result + detail data into a PlanningApplication-compatible dict.
 
-        if detail_url:
-            try:
-                detail = await self.get_application_detail(detail_url)
-            except Exception as exc:
-                self.metrics.record_error(
-                    exc, context=f"nec_detail:{raw.get('reference')}"
-                )
-                self.log.warning(
-                    "nec_detail_failed",
-                    reference=raw.get("reference"),
-                    error=str(exc),
-                )
-
-        merged = {**raw, **detail}
-        description = merged.get("description", "")
-        address = merged.get("address", "")
+        Note: The base class ``run()`` method already fetches detail pages
+        and merges them into ``raw`` before calling this method.  We do NOT
+        re-fetch the detail page here to avoid duplicate requests.
+        """
+        description = raw.get("description", "")
+        address = raw.get("address", "")
 
         return {
-            "reference": merged.get("reference", ""),
+            "reference": raw.get("reference", ""),
             "council_id": self.council_id,
             "address": address,
             "postcode": self.extract_postcode(address),
+            "ward": raw.get("ward", ""),
             "description": description,
-            "applicant_name": merged.get("applicant_name", ""),
-            "agent_name": merged.get("agent_name", ""),
-            "application_type": merged.get("application_type", ""),
-            "status": self.normalise_status(merged.get("status", "")),
+            "applicant_name": raw.get("applicant_name", ""),
+            "agent_name": raw.get("agent_name", ""),
+            "application_type": raw.get("application_type", ""),
+            "status": self.normalise_status(raw.get("status", "")),
+            "decision": raw.get("decision", ""),
             "scheme_type": self.classify_scheme_type(description),
-            "num_units": self.extract_unit_count(description),
-            "submission_date": merged.get("submission_date"),
-            "decision_date": merged.get("decision_date"),
-            "documents_url": merged.get("documents_url", ""),
-            "raw_html": None,
+            "total_units": self.extract_unit_count(description),
+            "submitted_date": raw.get("submission_date"),
+            "validated_date": raw.get("validated_date"),
+            "decision_date": raw.get("decision_date"),
+            "consultation_end_date": raw.get("consultation_end_date"),
+            "committee_date": raw.get("committee_date"),
+            "documents_url": raw.get("documents_url", ""),
+            "portal_url": raw.get("detail_url", ""),
+            "source": "nec_scraper",
+            "is_btr": self.classify_scheme_type(description) == "BTR",
+            "is_pbsa": self.classify_scheme_type(description) == "PBSA",
+            "is_affordable": self.classify_scheme_type(description) == "Affordable",
+            "raw_data": raw.get("raw_kv"),
         }
+
+    # ------------------------------------------------------------------
+    # Override run() to add residential filtering for date-range results
+    # ------------------------------------------------------------------
+
+    async def run(self, **search_kwargs: Any) -> list[dict[str, Any]]:
+        """Execute a complete scrape with residential relevance filtering.
+
+        Extends the base class ``run()`` to filter out non-residential
+        applications from broad date-range searches.  Applications found
+        via keyword search are kept regardless (they matched a BD keyword).
+        """
+        self.log.info("scrape_start", council=self.council_name)
+        self.metrics = ScraperMetrics()
+
+        results: list[dict[str, Any]] = []
+        try:
+            raw_results = await self.search_applications(**search_kwargs)
+            self.metrics.applications_found = len(raw_results)
+            self.log.info(
+                "search_complete",
+                results_count=len(raw_results),
+            )
+
+            for raw in raw_results:
+                try:
+                    # Fetch detail page if available
+                    detail_url = raw.get("detail_url")
+                    if detail_url:
+                        try:
+                            detail = await self.get_application_detail(detail_url)
+                            if detail:
+                                raw = {**raw, **{k: v for k, v in detail.items() if v}}
+                        except Exception as detail_exc:
+                            self.log.warning(
+                                "detail_fetch_failed",
+                                reference=raw.get("reference", "")[:80],
+                                error=str(detail_exc)[:120],
+                            )
+
+                    # Filter non-residential applications
+                    if not self._is_residential_relevant(raw):
+                        self.log.debug(
+                            "skipped_non_residential",
+                            reference=raw.get("reference", ""),
+                            app_type=raw.get("application_type", ""),
+                        )
+                        continue
+
+                    parsed = await self.parse_application(raw)
+                    results.append(parsed)
+                except Exception as exc:
+                    self.metrics.record_error(
+                        exc,
+                        context=f"parse: {raw.get('reference', 'unknown')}",
+                    )
+                    self.log.warning(
+                        "parse_error",
+                        reference=raw.get("reference"),
+                        error=str(exc),
+                    )
+        except Exception as exc:
+            self.metrics.record_error(exc, context="search_applications")
+            self.log.error("scrape_failed", error=str(exc))
+            raise
+
+        self.log.info(
+            "scrape_complete",
+            total_found=self.metrics.applications_found,
+            residential_relevant=len(results),
+            **self.metrics.to_dict(),
+        )
+        return results
+

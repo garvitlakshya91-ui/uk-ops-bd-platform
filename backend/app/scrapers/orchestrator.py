@@ -229,13 +229,30 @@ class ScraperOrchestrator:
                     "agent_name",
                     "application_type",
                     "status",
+                    "decision",
                     "scheme_type",
-                    "num_units",
-                    "submission_date",
+                    "total_units",
+                    "submitted_date",
+                    "validated_date",
                     "decision_date",
+                    "consultation_end_date",
+                    "committee_date",
                     "documents_url",
+                    "portal_url",
+                    "ward",
+                    "source",
+                    "is_btr",
+                    "is_pbsa",
+                    "is_affordable",
+                    "raw_data",
                 ):
                     new_val = app_data.get(field_name)
+                    # Also check legacy field names (num_units -> total_units,
+                    # submission_date -> submitted_date)
+                    if new_val is None and field_name == "total_units":
+                        new_val = app_data.get("num_units")
+                    if new_val is None and field_name == "submitted_date":
+                        new_val = app_data.get("submission_date")
                     if new_val is not None and new_val != getattr(existing, field_name, None):
                         setattr(existing, field_name, new_val)
                         updated = True
@@ -259,11 +276,22 @@ class ScraperOrchestrator:
                     agent_name=app_data.get("agent_name"),
                     application_type=app_data.get("application_type"),
                     status=app_data.get("status", "Unknown"),
+                    decision=app_data.get("decision"),
                     scheme_type=app_data.get("scheme_type", "Unknown"),
-                    num_units=app_data.get("num_units"),
-                    submission_date=app_data.get("submission_date"),
+                    total_units=app_data.get("total_units") or app_data.get("num_units"),
+                    submitted_date=app_data.get("submitted_date") or app_data.get("submission_date"),
+                    validated_date=app_data.get("validated_date"),
                     decision_date=app_data.get("decision_date"),
+                    consultation_end_date=app_data.get("consultation_end_date"),
+                    committee_date=app_data.get("committee_date"),
                     documents_url=app_data.get("documents_url"),
+                    portal_url=app_data.get("portal_url"),
+                    ward=app_data.get("ward"),
+                    source=app_data.get("source"),
+                    is_btr=app_data.get("is_btr", False),
+                    is_pbsa=app_data.get("is_pbsa", False),
+                    is_affordable=app_data.get("is_affordable", False),
+                    raw_data=app_data.get("raw_data"),
                 )
                 self.db.add(new_app)
                 new_apps.append(new_app)
@@ -298,9 +326,10 @@ class ScraperOrchestrator:
                 should_alert = True
                 reasons.append(f"scheme_type={app.scheme_type}")
 
-            if app.num_units and app.num_units >= ALERT_MIN_UNITS:
+            unit_count = getattr(app, "total_units", None) or getattr(app, "num_units", None)
+            if unit_count and unit_count >= ALERT_MIN_UNITS:
                 should_alert = True
-                reasons.append(f"units={app.num_units}")
+                reasons.append(f"units={unit_count}")
 
             if should_alert:
                 alert = Alert(
@@ -310,7 +339,7 @@ class ScraperOrchestrator:
                         f"A new {app.scheme_type} planning application has been found.\n\n"
                         f"Reference: {app.reference}\n"
                         f"Address: {app.address or 'N/A'}\n"
-                        f"Units: {app.num_units or 'N/A'}\n"
+                        f"Units: {unit_count or 'N/A'}\n"
                         f"Description: {(app.description or '')[:200]}\n"
                         f"Criteria: {', '.join(reasons)}"
                     ),
