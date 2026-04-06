@@ -30,6 +30,9 @@ export function formatRelativeDate(date: string | Date): string {
 
 export function formatNumber(num: number): string {
   const n = num ?? 0;
+  if (n >= 1000000000) {
+    return `${(n / 1000000000).toFixed(1)}B`;
+  }
   if (n >= 1000000) {
     return `${(n / 1000000).toFixed(1)}M`;
   }

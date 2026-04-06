@@ -1434,6 +1434,81 @@ class ContractFlatListResponse(BaseModel):
     limit: int
 
 
+class ContractStats(BaseModel):
+    total: int
+    current: int
+    expired: int
+    upcoming: int
+    expiring_6m: int
+    total_value: float
+    avg_value: float
+    type_distribution: dict[str, int]
+    source_distribution: dict[str, int]
+
+
+@router.get("/v2/contracts/stats", response_model=ContractStats)
+def get_contract_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return summary statistics for the contracts page header."""
+    import datetime
+    from sqlalchemy import func, case, and_
+
+    now = datetime.date.today()
+    six_months = now + datetime.timedelta(days=182)
+
+    total = db.query(func.count(SchemeContract.id)).scalar() or 0
+    current = db.query(func.count(SchemeContract.id)).filter(
+        SchemeContract.is_current.is_(True)
+    ).scalar() or 0
+    expired = db.query(func.count(SchemeContract.id)).filter(
+        SchemeContract.contract_end_date < now
+    ).scalar() or 0
+    upcoming = db.query(func.count(SchemeContract.id)).filter(
+        SchemeContract.contract_start_date > now
+    ).scalar() or 0
+    expiring_6m = db.query(func.count(SchemeContract.id)).filter(
+        and_(
+            SchemeContract.contract_end_date >= now,
+            SchemeContract.contract_end_date <= six_months,
+        )
+    ).scalar() or 0
+
+    total_value = db.query(func.sum(SchemeContract.contract_value)).filter(
+        SchemeContract.contract_value.isnot(None)
+    ).scalar() or 0
+    avg_value = db.query(func.avg(SchemeContract.contract_value)).filter(
+        SchemeContract.contract_value.isnot(None),
+        SchemeContract.contract_value > 0,
+    ).scalar() or 0
+
+    type_rows = (
+        db.query(SchemeContract.contract_type, func.count())
+        .filter(SchemeContract.contract_type.isnot(None))
+        .group_by(SchemeContract.contract_type)
+        .all()
+    )
+    source_rows = (
+        db.query(SchemeContract.source, func.count())
+        .filter(SchemeContract.source.isnot(None))
+        .group_by(SchemeContract.source)
+        .all()
+    )
+
+    return ContractStats(
+        total=total,
+        current=current,
+        expired=expired,
+        upcoming=upcoming,
+        expiring_6m=expiring_6m,
+        total_value=float(total_value),
+        avg_value=float(avg_value),
+        type_distribution={r[0]: r[1] for r in type_rows},
+        source_distribution={r[0]: r[1] for r in source_rows},
+    )
+
+
 @router.get("/v2/contracts", response_model=ContractFlatListResponse)
 def list_contracts_flat(
     skip: int = Query(0, ge=0),
@@ -1441,12 +1516,15 @@ def list_contracts_flat(
     search: Optional[str] = None,
     scheme_type: Optional[str] = None,
     source: Optional[str] = None,
+    contract_type: Optional[str] = None,
+    status: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_dir: Optional[str] = "desc",
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from sqlalchemy import or_, desc as sa_desc, asc as sa_asc
+    import datetime
+    from sqlalchemy import or_, desc as sa_desc, asc as sa_asc, and_
 
     query = (
         db.query(SchemeContract)
@@ -1463,6 +1541,24 @@ def list_contracts_flat(
         query = query.filter(
             SchemeContract.scheme.has(ExistingScheme.scheme_type == scheme_type)
         )
+    if contract_type is not None:
+        query = query.filter(SchemeContract.contract_type == contract_type)
+    if status is not None:
+        now = datetime.date.today()
+        six_months = now + datetime.timedelta(days=182)
+        if status == "current":
+            query = query.filter(SchemeContract.is_current.is_(True))
+        elif status == "expired":
+            query = query.filter(SchemeContract.contract_end_date < now)
+        elif status == "upcoming":
+            query = query.filter(SchemeContract.contract_start_date > now)
+        elif status == "expiring":
+            query = query.filter(
+                and_(
+                    SchemeContract.contract_end_date >= now,
+                    SchemeContract.contract_end_date <= six_months,
+                )
+            )
     if search is not None:
         pattern = f"%{search}%"
         query = query.filter(
