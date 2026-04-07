@@ -69,21 +69,16 @@ LONDON_BOROUGHS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Planning London Datahub API configuration
+# Data source: planning.data.gov.uk — authoritative national planning data
 # ---------------------------------------------------------------------------
 
-# The Datahub publishes data via the London Datastore CKAN API.
-# The planning decisions dataset resource ID may change — this is the current one.
-# Fallback: we also try the Datahub's own API endpoint.
+# The entity.json endpoint supports filtering by dataset and pagination.
+# We fetch the planning-application dataset and filter for London boroughs.
+PLANNING_DATA_GOV_API = "https://www.planning.data.gov.uk/entity.json"
 
-DATAHUB_API_BASE = "https://planninglondondatahub.london.gov.uk/api/applications"
-
-# Alternative: London Datastore CKAN API for the planning decisions dataset
-LONDON_DATASTORE_API = "https://data.london.gov.uk/api/3/action/datastore_search"
-
-# Known resource IDs for the London planning decisions dataset on data.london.gov.uk
-# These can change when datasets are republished.
-PLANNING_DECISIONS_RESOURCE_ID = "a674537f-7754-4626-b02e-7de0d3f15a2b"
+# London borough organisation-entity IDs on planning.data.gov.uk
+# These map to the 33 London boroughs + City of London.
+# We fetch ALL planning apps from this source then filter for residential 10+ units.
 
 # Minimum residential units to consider
 MIN_UNITS = 10
@@ -125,95 +120,38 @@ class GLAPlanningDatahubScraper:
             self.client = None
 
     # ------------------------------------------------------------------
-    # Primary fetch: Planning London Datahub API
+    # Fetch from planning.data.gov.uk
     # ------------------------------------------------------------------
 
-    async def _fetch_datahub_api(
-        self,
-        page: int = 1,
-        page_size: int = PAGE_SIZE,
-    ) -> list[dict[str, Any]]:
-        """
-        Fetch planning applications from the Datahub's own API.
-
-        The Datahub API uses a REST-style endpoint with query parameters
-        for filtering.
-        """
-        if not self.client:
-            raise RuntimeError("Client not initialised — use async with")
-
-        params: dict[str, Any] = {
-            "page": page,
-            "per_page": page_size,
-            "status": "Decided",  # Focus on decided applications
-        }
-
-        self.log.info("datahub_api_fetch", page=page, page_size=page_size)
-
-        try:
-            resp = await self.client.get(DATAHUB_API_BASE, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-
-            # The API may return data in different structures
-            if isinstance(data, dict):
-                records = data.get("data", data.get("results", data.get("records", [])))
-            elif isinstance(data, list):
-                records = data
-            else:
-                records = []
-
-            return records if isinstance(records, list) else []
-
-        except (httpx.HTTPStatusError, httpx.ConnectError) as exc:
-            self.log.warning(
-                "datahub_api_unavailable",
-                error=str(exc),
-                fallback="london_datastore",
-            )
-            return []
-
-    # ------------------------------------------------------------------
-    # Fallback: London Datastore CKAN API
-    # ------------------------------------------------------------------
-
-    async def _fetch_london_datastore(
+    async def _fetch_page(
         self,
         offset: int = 0,
         limit: int = PAGE_SIZE,
     ) -> tuple[list[dict[str, Any]], int]:
         """
-        Query the London Datastore CKAN datastore_search API.
+        Fetch a page of planning applications from planning.data.gov.uk.
 
-        Returns (records, total_count).
+        Returns (entities, total_count).
         """
         if not self.client:
             raise RuntimeError("Client not initialised — use async with")
 
-        params = {
-            "resource_id": PLANNING_DECISIONS_RESOURCE_ID,
+        params: dict[str, Any] = {
+            "dataset": "planning-application",
             "limit": limit,
             "offset": offset,
         }
 
-        self.log.info("london_datastore_fetch", offset=offset, limit=limit)
+        self.log.info("planning_data_gov_fetch", offset=offset, limit=limit)
 
-        resp = await self.client.get(LONDON_DATASTORE_API, params=params)
+        resp = await self.client.get(PLANNING_DATA_GOV_API, params=params)
         resp.raise_for_status()
-        payload = resp.json()
+        data = resp.json()
 
-        if not payload.get("success"):
-            self.log.warning(
-                "london_datastore_api_error",
-                error=payload.get("error", "Unknown"),
-            )
-            return [], 0
+        entities = data.get("entities", [])
+        total = data.get("count", 0)
 
-        result = payload.get("result", {})
-        records = result.get("records", [])
-        total = result.get("total", 0)
-
-        return records, total
+        return entities, total
 
     # ------------------------------------------------------------------
     # Parsing & normalisation
@@ -261,8 +199,11 @@ class GLAPlanningDatahubScraper:
 
     def _normalise_record(self, record: dict[str, Any]) -> dict[str, Any]:
         """
-        Convert a raw Datahub/Datastore record into a normalised dict
+        Convert a planning.data.gov.uk entity into a normalised dict
         matching PlanningApplication model fields.
+
+        planning.data.gov.uk fields use hyphens: reference, description,
+        decision-date, organisation-entity, name, point, geometry, etc.
         """
         # Extract reference
         reference = (
@@ -273,23 +214,19 @@ class GLAPlanningDatahubScraper:
             ""
         ).strip()
 
-        # Extract borough
-        borough = (
-            record.get("borough") or
-            record.get("lpa_name") or
-            record.get("planning_authority") or
-            ""
-        ).strip()
+        # Organisation-entity maps to a council
+        org_entity = str(record.get("organisation-entity", "")).strip()
 
         # Description
         description = (
             record.get("description") or
             record.get("development_description") or
             record.get("proposal") or
+            record.get("name") or
             ""
         ).strip()
 
-        # Address
+        # Address — planning.data.gov.uk doesn't always have a separate address
         address = (
             record.get("address") or
             record.get("site_address") or
@@ -297,16 +234,17 @@ class GLAPlanningDatahubScraper:
             ""
         ).strip()
 
-        # Postcode — try field or extract from address
+        # Postcode — try field or extract from address/description
         postcode = record.get("postcode", "")
         if not postcode and address:
             postcode = BaseScraper.extract_postcode(address) or ""
+        if not postcode and description:
+            postcode = BaseScraper.extract_postcode(description) or ""
 
         # Status / decision
         status = (
             record.get("status") or
             record.get("application_status") or
-            record.get("decision") or
             ""
         ).strip()
 
@@ -316,13 +254,15 @@ class GLAPlanningDatahubScraper:
             ""
         ).strip()
 
-        # Dates
+        # Dates — planning.data.gov.uk uses hyphenated field names
         submitted = self._parse_date(
+            record.get("start-date") or
             record.get("submission_date") or
             record.get("date_received") or
             record.get("registered_date")
         )
         decision_date = self._parse_date(
+            record.get("decision-date") or
             record.get("decision_date") or
             record.get("date_decision")
         )
@@ -339,80 +279,41 @@ class GLAPlanningDatahubScraper:
         is_pbsa = any(kw in desc_lower for kw in ("student", "pbsa", "student accommodation"))
         is_affordable = any(kw in desc_lower for kw in ("affordable", "social rent", "shared ownership"))
 
-        # Application type
-        app_type = (
-            record.get("application_type") or
-            record.get("app_type") or
-            record.get("development_type") or
-            ""
-        ).strip()
-
-        # Applicant
-        applicant = (
-            record.get("applicant_name") or
-            record.get("applicant") or
-            ""
-        ).strip()
-
-        # Agent
-        agent = (
-            record.get("agent_name") or
-            record.get("agent") or
-            record.get("case_officer") or
-            ""
-        ).strip()
-
-        # Ward
-        ward = (
-            record.get("ward") or
-            record.get("ward_name") or
-            ""
-        ).strip()
-
-        # Coordinates
+        # Coordinates from point field (POINT(lng lat) format)
         lat = None
         lng = None
-        for lat_field in ("latitude", "lat", "northing"):
-            v = record.get(lat_field)
-            if v is not None:
+        point = record.get("point", "")
+        if point and "POINT" in str(point).upper():
+            import re as _re
+            m = _re.search(r"POINT\s*\(\s*([-\d.]+)\s+([-\d.]+)\s*\)", str(point), _re.IGNORECASE)
+            if m:
                 try:
-                    lat = float(v)
-                    if not (-90 <= lat <= 90):
-                        lat = None
-                except (ValueError, TypeError):
-                    pass
-        for lng_field in ("longitude", "lng", "lon", "easting"):
-            v = record.get(lng_field)
-            if v is not None:
-                try:
-                    lng = float(v)
-                    if not (-180 <= lng <= 180):
-                        lng = None
-                except (ValueError, TypeError):
+                    lng = float(m.group(1))
+                    lat = float(m.group(2))
+                except ValueError:
                     pass
 
         return {
             "reference": reference,
-            "borough": borough,
+            "borough": "",  # resolved via org_entity in save step
+            "organisation_entity": org_entity,
             "address": address,
             "postcode": postcode,
             "description": description,
-            "applicant_name": applicant,
-            "agent_name": agent,
-            "application_type": app_type,
-            "status": BaseScraper.normalise_status(status),
+            "applicant_name": "",
+            "status": BaseScraper.normalise_status(status) if status else "",
             "decision": decision,
             "scheme_type": scheme_type,
             "total_units": units,
             "submitted_date": submitted,
             "decision_date": decision_date,
-            "ward": ward,
+            "ward": "",
             "latitude": lat,
             "longitude": lng,
             "is_btr": is_btr,
             "is_pbsa": is_pbsa,
             "is_affordable": is_affordable,
-            "source": "gla_planning_datahub",
+            "source": "planning_data_gov",
             "raw_data": record,
         }
 
@@ -422,54 +323,37 @@ class GLAPlanningDatahubScraper:
 
     async def fetch_all(
         self,
-        max_pages: int = 50,
+        max_pages: int = 250,
     ) -> list[dict[str, Any]]:
         """
-        Fetch all residential planning applications with 10+ units
-        from the Datahub.
+        Fetch all planning applications from planning.data.gov.uk.
 
-        First tries the Datahub API, falls back to the London Datastore
-        CKAN API.
+        The API provides ~100K applications. We paginate through all of them
+        and filter for residential applications with 10+ units.
 
         Returns normalised records ready for DB persistence.
         """
         all_records: list[dict[str, Any]] = []
+        offset = 0
 
-        # Strategy 1: Try the Datahub's own API
-        self.log.info("gla_fetch_start", strategy="datahub_api")
-        for page in range(1, max_pages + 1):
-            records = await self._fetch_datahub_api(page=page)
-            if not records:
-                if page == 1:
-                    # API returned nothing on first page — fall back
-                    self.log.info("datahub_api_empty_first_page", fallback="london_datastore")
-                    break
-                break  # No more pages
-            all_records.extend(records)
-            if len(records) < PAGE_SIZE:
-                break  # Last page
+        self.log.info("gla_fetch_start", strategy="planning_data_gov")
+        for _ in range(max_pages):
+            try:
+                entities, total = await self._fetch_page(offset=offset, limit=PAGE_SIZE)
+            except Exception as exc:
+                self.log.warning("planning_data_gov_fetch_failed", error=str(exc), offset=offset)
+                break
 
-        # Strategy 2: Fall back to London Datastore if Datahub API didn't work
-        if not all_records:
-            self.log.info("gla_fetch_fallback", strategy="london_datastore")
-            offset = 0
-            for _ in range(max_pages):
-                try:
-                    records, total = await self._fetch_london_datastore(
-                        offset=offset, limit=PAGE_SIZE
-                    )
-                except Exception as exc:
-                    self.log.warning("london_datastore_fetch_failed", error=str(exc))
-                    break
+            if not entities:
+                break
 
-                if not records:
-                    break
+            all_records.extend(entities)
+            offset += len(entities)
 
-                all_records.extend(records)
-                offset += len(records)
+            self.log.debug("gla_fetch_progress", fetched=len(all_records), total=total)
 
-                if offset >= total:
-                    break
+            if offset >= total:
+                break
 
         self.log.info("gla_raw_records_fetched", count=len(all_records))
 

@@ -158,7 +158,7 @@ class PlanItScraper(BaseScraper):
     ) -> list[dict[str, Any]]:
         """Paginate through all results for the given query parameters."""
         all_records: list[dict[str, Any]] = []
-        page = 0
+        page = 1  # PlanIt API uses 1-based pagination
         pg_sz = PLANIT_MAX_PAGE_SIZE
 
         while True:
@@ -232,7 +232,7 @@ class PlanItScraper(BaseScraper):
                     "q": keyword,
                     "start_date": chunk_start.isoformat(),
                     "end_date": chunk_end.isoformat(),
-                    "limit": 10000,  # Overall limit hint
+                    # pg_sz + page used for pagination
                 }
 
                 records = await self._fetch_all_pages(
@@ -259,7 +259,7 @@ class PlanItScraper(BaseScraper):
                     "app_size": app_size,
                     "start_date": chunk_start.isoformat(),
                     "end_date": chunk_end.isoformat(),
-                    "limit": 10000,
+                    # pg_sz + page used for pagination
                 }
 
                 records = await self._fetch_all_pages(

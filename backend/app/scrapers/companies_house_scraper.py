@@ -468,11 +468,16 @@ class CompaniesHouseScraper:
                 if len(page) < 50:
                     break
 
-        # Filter by SIC codes
+        # The basic search API doesn't return sic_codes — filter by
+        # company name containing the developer name and active status instead.
+        # SIC filtering happens at enrichment time via get_company().
+        dev_lower = developer_name.lower()
         spvs = []
         for company in results:
-            company_sics = set(company.get("sic_codes") or [])
-            if company_sics & target_sics:
+            title = (company.get("title") or "").lower()
+            status = (company.get("company_status") or "").lower()
+            # Keep companies whose name contains the developer name and are active
+            if dev_lower in title and status in ("active", ""):
                 spvs.append(company)
 
         log.info(

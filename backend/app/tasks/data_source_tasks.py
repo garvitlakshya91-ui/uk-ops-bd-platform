@@ -2,9 +2,11 @@
 Celery tasks for ingesting data from external property data sources.
 
 Tasks:
-- ingest_price_paid_data  — Land Registry Price Paid (monthly new-build CSV)
-- ingest_gla_planning     — GLA Planning London Datahub (daily)
-- ingest_bpf_btr_pipeline — BPF Build-to-Rent pipeline (quarterly)
+- ingest_price_paid_data      — Land Registry Price Paid (monthly new-build CSV)
+- ingest_gla_planning         — GLA Planning London Datahub (daily)
+- ingest_bpf_btr_pipeline     — BPF Build-to-Rent pipeline (quarterly)
+- ingest_epc_new_dwellings    — EPC new-dwelling scheme discovery (weekly)
+- ingest_arl_btr_schemes      — ARL/REalyse BTR Open & Operating list (monthly)
 """
 
 from __future__ import annotations
@@ -221,6 +223,151 @@ def ingest_bpf_btr_pipeline(self) -> dict[str, Any]:
 
     except Exception as exc:
         logger.exception("ingest_bpf_btr_pipeline_failed")
+        raise self.retry(exc=exc)
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# 4. EPC New-Dwelling Scheme Discovery
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.data_source_tasks.ingest_epc_new_dwellings",
+    max_retries=2,
+    default_retry_delay=1800,
+    acks_late=True,
+    time_limit=7200,  # 2 hours — nationwide scan
+)
+def ingest_epc_new_dwellings(
+    self,
+    days_back: int = 365,
+    min_cluster_size: int = 10,
+) -> dict[str, Any]:
+    """
+    Discover new-build residential schemes from the EPC register.
+
+    Queries the EPC API for all new-dwelling transactions in the given
+    period, clusters by postcode, and saves clusters of 10+ units as
+    schemes in existing_schemes.
+
+    Every new dwelling in England & Wales requires an EPC, making this
+    the most comprehensive free source for completed/near-completion
+    private development schemes.
+
+    Designed to run weekly via Celery Beat.
+    """
+    db = _get_db()
+    try:
+        logger.info(
+            "ingest_epc_new_dwellings_started",
+            days_back=days_back,
+            min_cluster_size=min_cluster_size,
+        )
+
+        from app.scrapers.epc_new_dwelling_scraper import (
+            EPCNewDwellingScraper,
+            save_epc_discovered_schemes,
+        )
+
+        async def _discover():
+            async with EPCNewDwellingScraper(
+                days_back=days_back,
+                min_cluster_size=min_cluster_size,
+            ) as scraper:
+                return await scraper.discover_schemes()
+
+        schemes = _run_async(_discover())
+
+        logger.info(
+            "ingest_epc_new_dwellings_discovered",
+            schemes_found=len(schemes),
+            total_units=sum(s.get("num_units", 0) for s in schemes),
+        )
+
+        if not schemes:
+            logger.info("ingest_epc_new_dwellings_no_schemes")
+            return {
+                "status": "success",
+                "schemes_discovered": 0,
+                "new": 0,
+                "updated": 0,
+            }
+
+        result = save_epc_discovered_schemes(schemes, db)
+
+        logger.info("ingest_epc_new_dwellings_completed", **result)
+        return {
+            "status": "success",
+            "schemes_discovered": len(schemes),
+            **result,
+        }
+
+    except Exception as exc:
+        logger.exception("ingest_epc_new_dwellings_failed")
+        raise self.retry(exc=exc)
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# 5. ARL/REalyse BTR Open & Operating List
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.data_source_tasks.ingest_arl_btr_schemes",
+    max_retries=3,
+    default_retry_delay=600,
+    acks_late=True,
+    time_limit=600,  # 10 min — single JS bundle download + parse
+)
+def ingest_arl_btr_schemes(self) -> dict[str, Any]:
+    """
+    Fetch BTR scheme data from the ARL/REalyse interactive map and save
+    to existing_schemes with source="arl_btr_open_operating".
+
+    The ARL publishes ~1,200 BTR schemes with rich metadata including
+    developer, funder, operator, unit counts, tenure type, planning refs,
+    and coordinates.  Data is embedded in a JS bundle and decoded via
+    Node.js.
+
+    Designed to run monthly via Celery Beat.
+    """
+    db = _get_db()
+    try:
+        logger.info("ingest_arl_btr_schemes_started")
+
+        from app.scrapers.arl_btr_scraper import ARLBTRScraper, save_arl_btr_schemes
+
+        async def _fetch():
+            async with ARLBTRScraper() as scraper:
+                return await scraper.fetch_and_normalise()
+
+        schemes = _run_async(_fetch())
+
+        logger.info(
+            "ingest_arl_btr_schemes_fetched",
+            schemes=len(schemes),
+        )
+
+        if not schemes:
+            logger.info("ingest_arl_btr_schemes_no_data")
+            return {
+                "status": "success",
+                "schemes_fetched": 0,
+                "new": 0,
+                "updated": 0,
+            }
+
+        result = save_arl_btr_schemes(schemes, db)
+
+        logger.info("ingest_arl_btr_schemes_completed", **result)
+        return {"status": "success", "schemes_fetched": len(schemes), **result}
+
+    except Exception as exc:
+        logger.exception("ingest_arl_btr_schemes_failed")
         raise self.retry(exc=exc)
     finally:
         db.close()

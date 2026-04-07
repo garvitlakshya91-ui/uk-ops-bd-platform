@@ -217,6 +217,18 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=30, day_of_month="1", month_of_year="1,4,7,10"),
         "options": {"queue": "scraping"},
     },
+    # EPC new-dwelling scheme discovery (weekly)
+    "discover-epc-new-dwelling-schemes-weekly": {
+        "task": "app.tasks.data_source_tasks.ingest_epc_new_dwellings",
+        "schedule": crontab(hour=3, minute=0, day_of_week="thursday"),
+        "options": {"queue": "scraping"},
+    },
+    # ARL/REalyse BTR Open & Operating list (monthly)
+    "ingest-arl-btr-schemes-monthly": {
+        "task": "app.tasks.data_source_tasks.ingest_arl_btr_schemes",
+        "schedule": crontab(hour=4, minute=0, day_of_month="1"),
+        "options": {"queue": "scraping"},
+    },
 }
 
 celery_app.autodiscover_tasks([
