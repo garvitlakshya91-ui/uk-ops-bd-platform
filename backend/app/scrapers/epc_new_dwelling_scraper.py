@@ -16,7 +16,7 @@ Docs: https://epc.opendatacommunities.org/docs/api
 Strategy:
     1. Query each local authority for new-dwelling EPCs in a date range
     2. Cluster certificates by postcode + lodgement month
-    3. Clusters of 10+ units = likely a multi-unit development scheme
+    3. Clusters of 5+ units = likely a multi-unit development scheme
     4. Save discovered schemes to existing_schemes
 """
 
@@ -38,7 +38,7 @@ logger = structlog.get_logger(__name__)
 EPC_API_BASE = "https://epc.opendatacommunities.org/api/v1"
 
 # Minimum units in a postcode cluster to consider it a scheme
-MIN_CLUSTER_UNITS = 10
+MIN_CLUSTER_UNITS = 5
 
 # EPC local-authority codes are ONS codes (e.g. E09000001)
 # We'll query by local-authority parameter
@@ -49,7 +49,7 @@ class EPCNewDwellingScraper:
     Discovers new-build residential schemes by querying the EPC register
     for new-dwelling transactions and clustering by postcode.
 
-    Each cluster of 10+ new-dwelling EPCs at the same postcode within
+    Each cluster of 5+ new-dwelling EPCs at the same postcode within
     a lodgement window likely represents a multi-unit development.
     """
 
@@ -402,7 +402,7 @@ class EPCNewDwellingScraper:
         Run the full discovery pipeline:
         1. Fetch new-dwelling EPCs (nationwide or per-LA)
         2. Cluster by postcode
-        3. Return scheme-like dicts for 10+ unit clusters
+        3. Return scheme-like dicts for 5+ unit clusters
 
         Parameters
         ----------

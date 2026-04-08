@@ -29,6 +29,7 @@ celery_app.conf.update(
         "app.tasks.scoring_tasks.*": {"queue": "scoring"},
         "app.tasks.developer_tracking_tasks.*": {"queue": "scraping"},
         "app.tasks.data_source_tasks.*": {"queue": "scraping"},
+        "app.tasks.scheme_enrichment_pipeline.*": {"queue": "enrichment"},
     },
 )
 
@@ -229,6 +230,21 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=4, minute=0, day_of_month="1"),
         "options": {"queue": "scraping"},
     },
+    # ------------------------------------------------------------------
+    # Unified scheme enrichment pipeline
+    # ------------------------------------------------------------------
+    # Full pipeline with CCOD (weekly — CCOD is slow)
+    "enrich-schemes-full-weekly": {
+        "task": "app.tasks.scheme_enrichment_pipeline.enrich_schemes_full",
+        "schedule": crontab(hour=6, minute=0, day_of_week="friday"),
+        "options": {"queue": "enrichment"},
+    },
+    # Quick enrichment after scraping (daily — skips CCOD)
+    "enrich-new-schemes-daily": {
+        "task": "app.tasks.scheme_enrichment_pipeline.enrich_new_schemes",
+        "schedule": crontab(hour=6, minute=30),
+        "options": {"queue": "enrichment"},
+    },
 }
 
 celery_app.autodiscover_tasks([
@@ -237,4 +253,5 @@ celery_app.autodiscover_tasks([
     "app.tasks.scoring_tasks",
     "app.tasks.developer_tracking_tasks",
     "app.tasks.data_source_tasks",
+    "app.tasks.scheme_enrichment_pipeline",
 ])

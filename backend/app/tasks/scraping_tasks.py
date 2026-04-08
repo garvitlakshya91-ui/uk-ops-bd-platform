@@ -26,6 +26,16 @@ def _get_db() -> Session:
     return SessionLocal()
 
 
+def _trigger_enrichment():
+    """Dispatch the quick enrichment pipeline after successful scraping."""
+    try:
+        from app.tasks.scheme_enrichment_pipeline import enrich_new_schemes
+        enrich_new_schemes.delay()
+        logger.info("post_scrape_enrichment_dispatched")
+    except Exception:
+        logger.warning("post_scrape_enrichment_dispatch_failed", exc_info=True)
+
+
 def _run_async(coro):
     """Run an async coroutine from synchronous Celery task context."""
     try:
@@ -445,6 +455,7 @@ def scrape_find_a_tender(self) -> dict[str, Any]:
         ingest_stats = ingest_tender_contracts(parsed, db)
 
         logger.info("scrape_find_a_tender_completed", **ingest_stats)
+        _trigger_enrichment()
         return {"status": "success", **ingest_stats}
 
     except Exception as exc:
@@ -479,6 +490,7 @@ def scrape_contracts_finder(self) -> dict[str, Any]:
         ingest_stats = ingest_contracts_finder(raw_results, db)
 
         logger.info("scrape_contracts_finder_completed", **ingest_stats)
+        _trigger_enrichment()
         return {"status": "success", **ingest_stats}
 
     except Exception as exc:

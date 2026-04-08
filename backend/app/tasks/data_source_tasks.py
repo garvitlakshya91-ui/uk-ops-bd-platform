@@ -28,6 +28,16 @@ def _get_db():
     return SessionLocal()
 
 
+def _trigger_enrichment():
+    """Dispatch the quick enrichment pipeline after successful ingestion."""
+    try:
+        from app.tasks.scheme_enrichment_pipeline import enrich_new_schemes
+        enrich_new_schemes.delay()
+        logger.info("post_scrape_enrichment_dispatched")
+    except Exception:
+        logger.warning("post_scrape_enrichment_dispatch_failed", exc_info=True)
+
+
 def _run_async(coro):
     """Run an async coroutine from synchronous Celery task context."""
     try:
@@ -106,6 +116,7 @@ def ingest_price_paid_data(
         result = save_price_paid_schemes(schemes, db)
 
         logger.info("ingest_price_paid_completed", **result)
+        _trigger_enrichment()
         return {"status": "success", "schemes_detected": len(schemes), **result}
 
     except Exception as exc:
@@ -162,6 +173,7 @@ def ingest_gla_planning(self) -> dict[str, Any]:
         result = save_gla_planning_applications(records, db)
 
         logger.info("ingest_gla_planning_completed", **result)
+        _trigger_enrichment()
         return {"status": "success", "records_fetched": len(records), **result}
 
     except Exception as exc:
@@ -219,6 +231,7 @@ def ingest_bpf_btr_pipeline(self) -> dict[str, Any]:
         result = save_bpf_btr_schemes(schemes, db)
 
         logger.info("ingest_bpf_btr_pipeline_completed", **result)
+        _trigger_enrichment()
         return {"status": "success", "schemes_fetched": len(schemes), **result}
 
     except Exception as exc:
@@ -298,6 +311,7 @@ def ingest_epc_new_dwellings(
         result = save_epc_discovered_schemes(schemes, db)
 
         logger.info("ingest_epc_new_dwellings_completed", **result)
+        _trigger_enrichment()
         return {
             "status": "success",
             "schemes_discovered": len(schemes),
@@ -364,6 +378,7 @@ def ingest_arl_btr_schemes(self) -> dict[str, Any]:
         result = save_arl_btr_schemes(schemes, db)
 
         logger.info("ingest_arl_btr_schemes_completed", **result)
+        _trigger_enrichment()
         return {"status": "success", "schemes_fetched": len(schemes), **result}
 
     except Exception as exc:
