@@ -139,8 +139,11 @@ _HOUSING_KEYWORDS = [
     "council housing",
 ]
 
-# Stages to fetch — award has supplier info; valid values: planning, tender, award
-_STAGES = ["award", "tender"]
+# Stages to fetch — award has supplier info; valid values: planning, tender, award, contract
+# "contract" stage releases carry the post-signature actual end dates and any
+# extensions / option exercises, which is the most accurate source for
+# contract_end_date on existing schemes.
+_STAGES = ["award", "tender", "contract"]
 
 # Max results per API page
 _PAGE_SIZE = 100
@@ -362,6 +365,10 @@ def _parse_release(release: dict[str, Any]) -> dict[str, Any] | None:
     tender = release.get("tender") or {}
     buyer = release.get("buyer") or {}
     awards = release.get("awards") or []
+    # OCDS "contract" stage releases populate top-level contracts[] with the
+    # post-signature actual period (which can extend beyond the original award
+    # period if an option has been exercised).
+    contracts = release.get("contracts") or []
 
     title = tender.get("title") or ""
     contracting_authority = buyer.get("name", "")
@@ -372,6 +379,29 @@ def _parse_release(release: dict[str, Any]) -> dict[str, Any] | None:
     start_date: date | None = None
     end_date: date | None = None
 
+    # Contract stage takes top precedence — it reflects the signed state.
+    if contracts:
+        # Pick the contract with the latest endDate (most extended) if multiple.
+        best_contract = None
+        best_end: date | None = None
+        for c in contracts:
+            cp = c.get("period") or {}
+            ce = _parse_iso_date(cp.get("endDate"))
+            if ce and (best_end is None or ce > best_end):
+                best_contract = c
+                best_end = ce
+        if best_contract is None:
+            best_contract = contracts[-1]
+        c_period = best_contract.get("period") or {}
+        start_date = _parse_iso_date(c_period.get("startDate"))
+        end_date = _parse_iso_date(c_period.get("endDate"))
+        c_val = (best_contract.get("value") or {}).get("amount")
+        if c_val is not None:
+            try:
+                contract_value = float(c_val)
+            except (TypeError, ValueError):
+                pass
+
     if awards:
         award = awards[-1]
         suppliers = award.get("suppliers") or []
@@ -379,16 +409,18 @@ def _parse_release(release: dict[str, Any]) -> dict[str, Any] | None:
             supplier = suppliers[0].get("name", "")
 
         award_val = (award.get("value") or {}).get("amount")
-        if award_val is not None:
+        if contract_value is None and award_val is not None:
             try:
                 contract_value = float(award_val)
             except (TypeError, ValueError):
                 pass
 
-        # Award period takes precedence (actual vs estimated)
+        # Award period as fallback when contract stage missing
         award_period = award.get("contractPeriod") or {}
-        start_date = _parse_iso_date(award_period.get("startDate"))
-        end_date = _parse_iso_date(award_period.get("endDate"))
+        if start_date is None:
+            start_date = _parse_iso_date(award_period.get("startDate"))
+        if end_date is None:
+            end_date = _parse_iso_date(award_period.get("endDate"))
 
     # Tender value as fallback
     if contract_value is None:

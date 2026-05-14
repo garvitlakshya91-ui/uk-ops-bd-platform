@@ -1901,3 +1901,211 @@ def reprocess_operator_extraction() -> dict[str, Any]:
 
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Contract end date inference from Companies House charges register and HMLR
+# ---------------------------------------------------------------------------
+
+# Typical amortisation period for property-backed lending in the UK BTR/PBSA
+# market. Charges most often align with operating-lease tenor of 25-35 years.
+_CH_CHARGE_AMORTISATION_YEARS = 25
+
+# Confidence threshold below which we will not overwrite an existing scheme's
+# contract_end_date. Inferences from charges/leases are lower confidence than
+# explicit OCDS award periods.
+_INFERENCE_CONFIDENCE = 0.4
+
+
+def _parse_ch_date(value: str | None) -> datetime.date | None:
+    """Parse a Companies House ISO date string."""
+    if not value:
+        return None
+    try:
+        return datetime.date.fromisoformat(value[:10])
+    except (ValueError, AttributeError):
+        return None
+
+
+@celery_app.task(
+    name="app.tasks.enrichment_tasks.backfill_contract_dates_from_ch_charges",
+    acks_late=True,
+)
+def backfill_contract_dates_from_ch_charges(batch_size: int = 200) -> dict[str, Any]:
+    """Infer ``contract_end_date`` from the Companies House charges register.
+
+    For each scheme where ``contract_end_date`` is NULL but the owner or
+    operator company has a Companies House number, pull the charges register
+    and use the earliest outstanding charge's ``created_on`` plus a typical
+    25-year amortisation as a proxy for the operating-lease / contract end.
+
+    This is a lower-confidence inference than OCDS award periods, so we only
+    write the value when nothing better exists and we record a low
+    ``data_confidence_score`` reflecting the inference.
+
+    Designed to run weekly via Celery Beat after the higher-confidence
+    OCDS-based backfill tasks have run.
+    """
+    db = _get_db()
+    try:
+        from app.models.models import Company, ExistingScheme
+        from app.scrapers.companies_house_scraper import CompaniesHouseScraper
+
+        # Pick schemes missing contract_end_date that have a company we can
+        # query. Prefer operator first (more directly tied to the operating
+        # contract), fall back to owner.
+        schemes = (
+            db.query(ExistingScheme)
+            .filter(ExistingScheme.contract_end_date.is_(None))
+            .filter(
+                or_(
+                    ExistingScheme.operator_company_id.isnot(None),
+                    ExistingScheme.owner_company_id.isnot(None),
+                )
+            )
+            .limit(batch_size)
+            .all()
+        )
+
+        if not schemes:
+            logger.info("backfill_ch_charges_none_found")
+            return {"scanned": 0, "updated": 0, "no_charges": 0, "errors": 0}
+
+        logger.info("backfill_ch_charges_found", count=len(schemes))
+
+        async def _process_all() -> tuple[int, int, int]:
+            updated = 0
+            no_charges = 0
+            errors = 0
+
+            scraper = CompaniesHouseScraper()
+            try:
+                for scheme in schemes:
+                    company_id = (
+                        scheme.operator_company_id
+                        or scheme.owner_company_id
+                    )
+                    if not company_id:
+                        continue
+                    company = db.query(Company).get(company_id)
+                    if not company or not company.companies_house_number:
+                        continue
+
+                    try:
+                        charges = await scraper.get_charges(
+                            company.companies_house_number
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "backfill_ch_charges_fetch_failed",
+                            scheme_id=scheme.id,
+                            ch_number=company.companies_house_number,
+                            error=str(exc)[:120],
+                        )
+                        errors += 1
+                        continue
+
+                    if not charges:
+                        no_charges += 1
+                        continue
+
+                    # Take the earliest outstanding charge — closest to the
+                    # initial financing event for the scheme.
+                    outstanding = [
+                        c for c in charges
+                        if (c.get("status") or "").lower() in {"outstanding", "partly-satisfied"}
+                    ]
+                    candidates = outstanding or charges
+
+                    created_dates = [
+                        _parse_ch_date(c.get("created_on"))
+                        for c in candidates
+                    ]
+                    created_dates = [d for d in created_dates if d]
+                    if not created_dates:
+                        no_charges += 1
+                        continue
+
+                    earliest = min(created_dates)
+                    inferred_end = earliest.replace(
+                        year=earliest.year + _CH_CHARGE_AMORTISATION_YEARS
+                    )
+
+                    scheme.contract_end_date = inferred_end
+                    # Tag the source so it's clear this was inferred, not
+                    # observed from a tender notice.
+                    if not scheme.source:
+                        scheme.source = "ch_charges_inferred"
+                    if (
+                        scheme.data_confidence_score is None
+                        or scheme.data_confidence_score > _INFERENCE_CONFIDENCE
+                    ):
+                        scheme.data_confidence_score = _INFERENCE_CONFIDENCE
+                    updated += 1
+                    logger.info(
+                        "backfill_ch_charges_inferred",
+                        scheme_id=scheme.id,
+                        ch_number=company.companies_house_number,
+                        earliest_charge=earliest.isoformat(),
+                        inferred_end=inferred_end.isoformat(),
+                    )
+
+                db.commit()
+                return updated, no_charges, errors
+            finally:
+                await scraper.close()
+
+        updated, no_charges, errors = _run_async(_process_all())
+
+        result = {
+            "scanned": len(schemes),
+            "updated": updated,
+            "no_charges": no_charges,
+            "errors": errors,
+        }
+        logger.info("backfill_ch_charges_completed", **result)
+        return result
+
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    name="app.tasks.enrichment_tasks.flag_leasehold_schemes_for_review",
+    acks_late=True,
+)
+def flag_leasehold_schemes_for_review() -> dict[str, Any]:
+    """Flag leasehold schemes without a contract_end_date for manual review.
+
+    HMLR CCOD provides Tenure (Freehold/Leasehold) but not the lease expiry
+    date — that lives in the title register (£3 per title, manual download).
+    For now we just identify the cohort so it can be batched for paid HMLR
+    register pulls, rather than spending money speculatively.
+    """
+    db = _get_db()
+    try:
+        from app.models.models import ExistingScheme
+
+        leasehold_no_end = (
+            db.query(ExistingScheme)
+            .filter(ExistingScheme.hmlr_tenure == "Leasehold")
+            .filter(ExistingScheme.contract_end_date.is_(None))
+            .count()
+        )
+        leasehold_with_title = (
+            db.query(ExistingScheme)
+            .filter(ExistingScheme.hmlr_tenure == "Leasehold")
+            .filter(ExistingScheme.hmlr_title_number.isnot(None))
+            .filter(ExistingScheme.contract_end_date.is_(None))
+            .count()
+        )
+
+        result = {
+            "leasehold_schemes_without_end_date": leasehold_no_end,
+            "with_hmlr_title_number_available": leasehold_with_title,
+        }
+        logger.info("flag_leasehold_review", **result)
+        return result
+
+    finally:
+        db.close()

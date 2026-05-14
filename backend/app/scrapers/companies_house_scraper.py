@@ -291,6 +291,46 @@ class CompaniesHouseScraper:
             return []
         return data.get("items", [])
 
+    async def get_charges(
+        self,
+        company_number: str,
+        *,
+        items_per_page: int = 50,
+        start_index: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Get the charge register (mortgages, debentures, fixed charges) for a company.
+
+        Charges typically cover the property assets used as security for
+        long-term financing. The ``created_on`` date plus the loan amortisation
+        period is a good proxy for when the operating lease / contract on the
+        underlying property is expected to end.
+
+        See: https://developer.company-information.service.gov.uk/api/reference/charges/list
+
+        Parameters
+        ----------
+        company_number : str
+            Companies House registration number.
+
+        Returns
+        -------
+        list[dict]
+            List of charge records. Each record contains ``created_on``,
+            ``delivered_on``, ``status`` (outstanding / satisfied / partly-satisfied),
+            ``classification``, ``persons_entitled``, ``transactions``, etc.
+        """
+        data = await self._request(
+            "GET",
+            f"/company/{company_number}/charges",
+            params={
+                "items_per_page": min(items_per_page, 100),
+                "start_index": start_index,
+            },
+        )
+        if not data:
+            return []
+        return data.get("items", [])
+
     async def get_filing_history(
         self,
         company_number: str,

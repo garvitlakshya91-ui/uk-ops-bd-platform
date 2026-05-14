@@ -280,6 +280,22 @@ def list_application_councils(current_user: User = Depends(get_current_user), db
     return [r[0] for r in results]
 
 
+@router.get("/v2/scheme-councils")
+def list_scheme_councils(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Return councils that have at least one existing scheme (for filter dropdowns).
+
+    Returns ``{id, name}`` because the /v2/schemes endpoint filters by ``council_id``.
+    """
+    results = (
+        db.query(Council.id, Council.name)
+        .join(ExistingScheme, ExistingScheme.council_id == Council.id)
+        .distinct()
+        .order_by(Council.name)
+        .all()
+    )
+    return [{"id": r[0], "name": r[1]} for r in results]
+
+
 @router.get("/v2/applications", response_model=ApplicationFlatListResponse)
 def list_applications_flat(
     skip: int = Query(0, ge=0),
@@ -303,6 +319,10 @@ def list_applications_flat(
             joinedload(PlanningApplication.pipeline_opportunity),
         )
     )
+
+    # Default to newest-first when no explicit sort is given.
+    if sort_by is None:
+        sort_by = "date"
 
     if council_id is not None:
         query = query.filter(PlanningApplication.council_id == council_id)
@@ -332,7 +352,7 @@ def list_applications_flat(
         "date": PlanningApplication.submission_date,
         "bd_score": PlanningApplication.num_units,  # proxy: larger = higher BD value
     }
-    order_col = sort_map.get(sort_by, PlanningApplication.num_units)
+    order_col = sort_map.get(sort_by, PlanningApplication.submission_date)
     items = (
         query.order_by(dir_fn(order_col).nullslast())
         .offset(skip)

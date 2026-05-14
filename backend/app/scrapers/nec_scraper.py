@@ -381,8 +381,8 @@ class NECScraper(BaseScraper):
         date_to: date | None = None,
         keywords: list[str] | None = None,
         max_pages: int = 20,
-        keyword_lookback_days: int = 180,
-        date_range_lookback_days: int = 28,
+        keyword_lookback_days: int = 365,
+        date_range_lookback_days: int = 180,
         skip_keyword_search: bool = False,
         skip_date_range_search: bool = False,
         application_type_code: str | None = None,
@@ -403,9 +403,9 @@ class NECScraper(BaseScraper):
         max_pages : int
             Maximum result pages to paginate through per search.
         keyword_lookback_days : int
-            How far back to look for keyword searches (default 180 days).
+            How far back to look for keyword searches (default 365 days).
         date_range_lookback_days : int
-            How far back to look for date-range searches (default 28 days).
+            How far back to look for date-range searches (default 180 days).
         skip_keyword_search : bool
             If True, skip the keyword search strategy entirely.
         skip_date_range_search : bool

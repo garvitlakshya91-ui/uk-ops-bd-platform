@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import traceback
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Optional, Type
 
 import structlog
@@ -361,6 +361,23 @@ class ScraperOrchestrator:
     # Run a single council scraper
     # ------------------------------------------------------------------
 
+    def _compute_date_from(self, council: Council, default_lookback_days: int = 180) -> date:
+        """
+        Compute the search ``date_from`` for a council so that gaps self-heal.
+
+        Returns the earlier of:
+        - today minus ``default_lookback_days`` (the scraper's normal window), and
+        - council.last_scraped_at minus a 7-day safety margin (catches anything
+          published between the last run and now if the council was offline,
+          or if the previous run missed something).
+        """
+        default_from = date.today() - timedelta(days=default_lookback_days)
+        if council.last_scraped_at is None:
+            return default_from
+
+        safety_from = council.last_scraped_at.date() - timedelta(days=7)
+        return min(default_from, safety_from)
+
     async def run_council(self, council: Council) -> ScraperMetrics:
         """
         Run the scraper for a single council.
@@ -376,16 +393,20 @@ class ScraperOrchestrator:
         scraper_name = type(scraper).__name__
         run = self._create_scraper_run(council, scraper_name)
 
+        # Self-healing lookback: extend search window if previous runs left gaps.
+        date_from = self._compute_date_from(council)
+
         self.log.info(
             "council_scrape_start",
             council=council.name,
             scraper=scraper_name,
             run_id=run.id,
+            date_from=date_from.isoformat(),
         )
 
         try:
             async with scraper:
-                applications = await scraper.run()
+                applications = await scraper.run(date_from=date_from)
 
             new_apps = self._save_applications(council, applications, scraper.metrics)
             self._create_alerts(new_apps)

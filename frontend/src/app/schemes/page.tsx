@@ -384,12 +384,28 @@ export default function SchemesPage() {
   const [sortBy, setSortBy] = useState('bd_score');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState('');
+  const [councilFilter, setCouncilFilter] = useState('');
+  const [councilOptions, setCouncilOptions] = useState<{ value: string; label: string }[]>([]);
   const [pipelineModalScheme, setPipelineModalScheme] = useState<SchemeRow | null>(null);
+
+  // Load councils-with-schemes once for the filter dropdown
+  useEffect(() => {
+    api.get('/v2/scheme-councils')
+      .then(res => {
+        const opts = (res.data || []).map((c: { id: number; name: string }) => ({
+          value: String(c.id),
+          label: c.name,
+        }));
+        setCouncilOptions(opts);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const params: Record<string, string> = { limit: '500' };
     if (search) params.search = search;
     if (typeFilter) params.scheme_type = typeFilter;
+    if (councilFilter) params.council_id = councilFilter;
 
     api.get('/v2/schemes', { params })
       .then(res => {
@@ -425,7 +441,7 @@ export default function SchemesPage() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [search, typeFilter]);
+  }, [search, typeFilter, councilFilter]);
 
   const sortedSchemes = [...schemes]
     .filter((s) => {
@@ -628,9 +644,16 @@ export default function SchemesPage() {
           placeholder="All Types"
           className="w-48"
         />
-        {(typeFilter || search) && (
+        <Select
+          options={councilOptions}
+          value={councilFilter}
+          onChange={setCouncilFilter}
+          placeholder="All Councils"
+          className="w-56"
+        />
+        {(typeFilter || search || councilFilter) && (
           <button
-            onClick={() => { setTypeFilter(''); setSearch(''); }}
+            onClick={() => { setTypeFilter(''); setSearch(''); setCouncilFilter(''); }}
             className="text-xs text-slate-400 hover:text-white px-2 py-1"
           >
             Clear filters

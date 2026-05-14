@@ -116,7 +116,7 @@ class PlanningDataAPIScraper(BaseScraper):
             List of raw application dicts from the API.
         """
         if date_from is None:
-            date_from = date.today() - timedelta(days=90)
+            date_from = date.today() - timedelta(days=180)
         if date_to is None:
             date_to = date.today()
 

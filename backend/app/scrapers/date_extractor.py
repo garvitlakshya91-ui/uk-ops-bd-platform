@@ -182,7 +182,10 @@ _RE_START_DATE = re.compile(
     re.IGNORECASE,
 )
 _RE_END_DATE = re.compile(
-    r"(?:end\s*date|expiry\s*date|termination\s*date|ending|expires?)\s*[:;]?\s*(.+?)(?:[,;.]|$)",
+    r"(?:end\s*date|expiry\s*date|termination\s*date|"
+    r"expir(?:y|ing|es?)\s*(?:date|on)?|"
+    r"to\s+expire(?:\s+on)?|"
+    r"ending|completes?\s+on)\s*[:;]?\s*(.+?)(?:[,;.]|$)",
     re.IGNORECASE,
 )
 
@@ -220,6 +223,23 @@ _RE_N_YEAR = re.compile(
 # "commencing X", "from X for N years"
 _RE_START_WITH_DURATION = re.compile(
     r"(?:commencing|starting|from|beginning)\s+(.+?)\s+for\s+(\d+)\s*[\-\u2013]?\s*(years?|months?)",
+    re.IGNORECASE,
+)
+
+# Housing FM contracts often expressed as N+M[+P] (initial + extension years).
+# Examples: "5+2+2", "3 + 2", "10+5". We treat this as total = sum of all terms.
+_RE_EXTENSION_STRUCTURE = re.compile(
+    r"\b(\d{1,2})\s*\+\s*(\d{1,2})(?:\s*\+\s*(\d{1,2}))?\s*(?:year|yr)s?\b",
+    re.IGNORECASE,
+)
+
+# "with the option to extend for N years", "plus N+N year extensions"
+_RE_OPTION_EXTEND = re.compile(
+    r"(?:with\s+(?:an?\s+)?option\s+to\s+extend\s+(?:for\s+)?|"
+    r"option\s+to\s+extend\s+by\s+|"
+    r"plus\s+(?:an?\s+)?|"
+    r"with\s+(?:an?\s+)?(?:further\s+)?extension\s+of\s+)"
+    r"(\d+)\s*[\-\u2013]?\s*(years?|months?)",
     re.IGNORECASE,
 )
 
@@ -400,7 +420,8 @@ def extract_contract_duration(text: str) -> int | None:
     """Extract contract duration in months from a free-text description.
 
     Looks for patterns like "for 5 years", "3 year contract",
-    "initial term of 36 months", etc.
+    "initial term of 36 months", "5+2+2 year structure", "with option to
+    extend for 2 years", etc. Extension options are summed into the total.
 
     Parameters
     ----------
@@ -415,30 +436,59 @@ def extract_contract_duration(text: str) -> int | None:
     if not text or not text.strip():
         return None
 
+    # Extension structure: "5+2+2 years" -> 9 years total
+    m = _RE_EXTENSION_STRUCTURE.search(text)
+    if m:
+        try:
+            parts = [int(g) for g in m.groups() if g]
+            total = sum(parts)
+            if 1 <= total <= 40:
+                return total * 12
+        except ValueError:
+            pass
+
     # Check explicit month durations first (more precise)
+    base_months: int | None = None
     m = _RE_DURATION_MONTHS.search(text)
     if m:
         try:
-            return int(m.group(1))
+            base_months = int(m.group(1))
         except ValueError:
             pass
 
     # Then year durations
-    m = _RE_DURATION_YEARS.search(text)
-    if m:
-        try:
-            return int(m.group(1)) * 12
-        except ValueError:
-            pass
+    if base_months is None:
+        m = _RE_DURATION_YEARS.search(text)
+        if m:
+            try:
+                base_months = int(m.group(1)) * 12
+            except ValueError:
+                pass
 
     # Fallback: "N year" anywhere
-    m = _RE_N_YEAR.search(text)
-    if m:
-        try:
-            years = int(m.group(1))
-            if 1 <= years <= 30:  # Sanity check
-                return years * 12
-        except ValueError:
-            pass
+    if base_months is None:
+        m = _RE_N_YEAR.search(text)
+        if m:
+            try:
+                years = int(m.group(1))
+                if 1 <= years <= 30:
+                    base_months = years * 12
+            except ValueError:
+                pass
 
-    return None
+    if base_months is None:
+        return None
+
+    # Add extension options to the base term.
+    for em in _RE_OPTION_EXTEND.finditer(text):
+        try:
+            n = int(em.group(1))
+            unit = em.group(2).lower().rstrip("s")
+            if unit == "year" and 1 <= n <= 20:
+                base_months += n * 12
+            elif unit == "month" and 1 <= n <= 240:
+                base_months += n
+        except ValueError:
+            continue
+
+    return base_months

@@ -70,7 +70,7 @@ export default function ApplicationsPage() {
   const [showMap, setShowMap] = useState(false);
   const [page, setPage] = useState(0);
   const [allCouncils, setAllCouncils] = useState<string[]>([]);
-  const [sortBy, setSortBy] = useState<'date' | 'units' | 'bd_score' | ''>('');
+  const [sortBy, setSortBy] = useState<'date' | 'units' | 'bd_score' | ''>('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const PAGE_SIZE = 100;
 

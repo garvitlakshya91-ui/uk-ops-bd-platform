@@ -249,7 +249,7 @@ class IdoxScraper(BaseScraper):
         detail_url.
         """
         if date_from is None:
-            date_from = date.today() - timedelta(days=90)
+            date_from = date.today() - timedelta(days=180)
         if date_to is None:
             date_to = date.today()
         if keywords is None:
