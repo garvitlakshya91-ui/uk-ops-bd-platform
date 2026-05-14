@@ -432,4 +432,144 @@ export async function activateUser(id: string): Promise<void> {
   await api.put(`/users/${id}/activate`);
 }
 
+// AI Enrichment
+export interface AIFieldSuggestion {
+  field: string;
+  current_value: string | null;
+  suggested_value: string | null;
+  confidence: number;
+  reasoning: string | null;
+}
+
+export interface AIRentSuggestion {
+  room_type: string | null;
+  rent_per_week: number | null;
+  rent_per_month: number | null;
+  currency: string;
+  academic_year: string | null;
+  contract_length_weeks: number | null;
+  confidence: number;
+  reasoning: string | null;
+}
+
+export interface AIEnrichmentResult {
+  scheme_id: number;
+  scheme_name: string;
+  suggestions: AIFieldSuggestion[];
+  rents: AIRentSuggestion[];
+  model_used: string;
+  raw_ai_notes: string | null;
+  web_search_used: boolean;
+}
+
+export async function aiEnrichScheme(schemeId: string): Promise<AIEnrichmentResult> {
+  const { data } = await api.post(`/schemes/${schemeId}/ai-enrich`);
+  return data;
+}
+
+export async function applyAISuggestions(
+  schemeId: string,
+  suggestions: Array<{ field: string; value: string | null }>,
+  rents: AIRentSuggestion[] = [],
+): Promise<{ applied_fields: string[]; skipped_fields: Array<{ field: string; reason: string }>; rents_saved: number }> {
+  const { data } = await api.post(`/schemes/${schemeId}/ai-enrich/apply`, { suggestions, rents });
+  return data;
+}
+
+export async function aiEnrichBatch(schemeIds: string[]): Promise<{
+  results: AIEnrichmentResult[];
+  total_requested: number;
+  total_enriched: number;
+  errors: Array<{ scheme_id: number; error: string }>;
+}> {
+  const { data } = await api.post('/schemes/ai-enrich-batch', { scheme_ids: schemeIds.map(Number) });
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Scheme field manual override (PATCH /api/v2/schemes/{id}/field)
+// ---------------------------------------------------------------------------
+
+export interface SchemeFieldPatchResponse {
+  scheme_id: number;
+  field: string;
+  applied: boolean;
+  new_value: string | null;
+  locked_by: string | null;
+  message: string;
+}
+
+// ---------------------------------------------------------------------------
+// Scheme filters: autocomplete + filter-options
+// ---------------------------------------------------------------------------
+
+export interface OperatorAutocompleteItem {
+  id: number;
+  name: string;
+  scheme_count: number;
+}
+
+export async function searchOperators(q: string, limit = 10): Promise<OperatorAutocompleteItem[]> {
+  const { data } = await api.get('/v2/operators/autocomplete', { params: { q, limit } });
+  return data;
+}
+
+export interface FilterOptionCount {
+  value: string;
+  count: number;
+  label?: string | null;
+}
+
+export interface SchemesFilterOptions {
+  sources: FilterOptionCount[];
+  scheme_types: FilterOptionCount[];
+  regions: string[];
+}
+
+export async function getSchemesFilterOptions(): Promise<SchemesFilterOptions> {
+  const { data } = await api.get('/v2/schemes/filter-options');
+  return data;
+}
+
+export interface Competitor {
+  operator_id: number;
+  operator_name: string;
+  scheme_count: number;
+  avg_units: number | null;
+  has_rent_data: boolean;
+  sample_scheme_name: string | null;
+  sample_scheme_id: string | null;
+}
+
+export async function getSchemeCompetitors(schemeId: string | number): Promise<Competitor[]> {
+  const { data } = await api.get(`/v2/schemes/${schemeId}/competitors`);
+  return data;
+}
+
+export interface SchemeRent {
+  id: string;
+  room_type: string | null;
+  rent_per_week: number | null;
+  rent_per_month: number | null;
+  currency: string;
+  academic_year: string | null;
+  contract_length_weeks: number | null;
+  source: string | null;
+  scraped_at: string | null;
+}
+
+export async function getSchemeRents(schemeId: string | number): Promise<SchemeRent[]> {
+  const { data } = await api.get(`/v2/schemes/${schemeId}/rents`);
+  return data;
+}
+
+export async function patchSchemeField(
+  schemeId: string | number,
+  field: string,
+  value: unknown,
+): Promise<SchemeFieldPatchResponse> {
+  const { data } = await api.patch(`/v2/schemes/${schemeId}/field`, { field, value });
+  return data;
+}
+
 export default api;

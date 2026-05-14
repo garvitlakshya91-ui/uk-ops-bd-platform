@@ -1,6 +1,15 @@
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 from pydantic import model_validator
 from typing import Optional
+
+# Explicitly load .env before Settings is created so env vars are always available
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path, override=True)
 
 
 class Settings(BaseSettings):
@@ -33,6 +42,9 @@ class Settings(BaseSettings):
     COMPANIES_HOUSE_API_KEY: str = ""
     APOLLO_API_KEY: str = ""
     HUNTER_API_KEY: str = ""
+
+    # Anthropic (Claude AI)
+    ANTHROPIC_API_KEY: str = ""
 
     # EPC Open Data Communities API
     EPC_API_KEY: str = ""  # Register at https://epc.opendatacommunities.org/
@@ -94,7 +106,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3010", "http://localhost:5173"]
 
     model_config = {
-        "env_file": ".env",
+        "env_file": os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"),
         "env_file_encoding": "utf-8",
         "case_sensitive": True,
     }

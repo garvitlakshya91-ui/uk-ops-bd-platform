@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { cn } from '@/lib/utils';
 
@@ -20,19 +20,28 @@ export default function SearchInput({
   className,
 }: SearchInputProps) {
   const [localValue, setLocalValue] = useState(controlledValue || '');
+  const lastFiredRef = useRef<string>(controlledValue || '');
+  // Stash the latest onChange in a ref so a re-rendered parent doesn't retrigger
+  // the debounce effect (which would otherwise reset the timer on every render).
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
 
   useEffect(() => {
     if (controlledValue !== undefined) {
       setLocalValue(controlledValue);
+      lastFiredRef.current = controlledValue;
     }
   }, [controlledValue]);
 
   useEffect(() => {
+    // Skip if the value we would fire matches what we last fired
+    if (localValue === lastFiredRef.current) return;
     const timer = setTimeout(() => {
-      onChange(localValue);
+      lastFiredRef.current = localValue;
+      onChangeRef.current(localValue);
     }, debounceMs);
     return () => clearTimeout(timer);
-  }, [localValue, debounceMs, onChange]);
+  }, [localValue, debounceMs]);
 
   return (
     <div className={cn('relative', className)}>

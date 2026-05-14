@@ -310,7 +310,7 @@ export default function ContractsPage() {
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
         <SearchInput
-          placeholder="Search contracts, schemes, operators, clients..."
+          placeholder="Search by scheme, operator, client, reference, postcode, council..."
           onChange={setSearch}
           className="w-72"
         />

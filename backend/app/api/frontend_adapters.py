@@ -8,9 +8,9 @@ alongside the original API and delegate to the same DB models.
 
 import datetime
 import re
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, and_, cast, Date as SADate
 from sqlalchemy.orm import Session, joinedload
@@ -21,6 +21,7 @@ from app.models.models import (
     PipelineOpportunity,
     ExistingScheme,
     SchemeContract,
+    SchemeRent,
     Alert,
     Council,
     Company,
@@ -249,6 +250,7 @@ class ApplicationFlat(BaseModel):
     id: str
     reference: str
     address: Optional[str] = None
+    postcode: Optional[str] = None
     council: Optional[str] = None
     scheme_type: str
     units: Optional[int] = None
@@ -257,6 +259,7 @@ class ApplicationFlat(BaseModel):
     date: Optional[str] = None
     bd_score: Optional[float] = None
     description: Optional[str] = None
+    case_officer: Optional[str] = None
     decision_date: Optional[str] = None
 
 
@@ -338,8 +341,10 @@ def list_applications_flat(
             or_(
                 PlanningApplication.reference.ilike(pattern),
                 PlanningApplication.address.ilike(pattern),
+                PlanningApplication.postcode.ilike(pattern),
                 PlanningApplication.description.ilike(pattern),
                 PlanningApplication.applicant_name.ilike(pattern),
+                PlanningApplication.council.has(Council.name.ilike(pattern)),
             )
         )
 
@@ -407,6 +412,7 @@ def list_applications_flat(
                 id=str(app.id),
                 reference=app.reference,
                 address=app.address,
+                postcode=app.postcode,
                 council=app.council.name if app.council else None,
                 scheme_type=app.scheme_type,
                 units=app.num_units,
@@ -419,6 +425,7 @@ def list_applications_flat(
                 ),
                 bd_score=bd_score,
                 description=app.description,
+                case_officer=getattr(app, 'case_officer', None),
                 decision_date=(
                     app.decision_date.isoformat()
                     if app.decision_date
@@ -574,6 +581,7 @@ class SchemeFlat(BaseModel):
     name: str
     operator: Optional[str] = None
     council: Optional[str] = None
+    region: Optional[str] = None
     units: Optional[int] = None
     contract_end: Optional[str] = None
     performance: Optional[float] = None
@@ -597,6 +605,9 @@ class SchemeFlat(BaseModel):
     score_breakdown: Optional[ScoreBreakdownFlat] = None
     operator_company_id: Optional[str] = None
     pipeline_opportunity_id: Optional[str] = None
+    locked_fields: dict[str, str] = {}
+    min_rent_per_week: Optional[float] = None
+    rent_tier_count: int = 0
 
 
 class SchemeFlatListResponse(BaseModel):
@@ -718,13 +729,29 @@ def _derive_priority(bd_score: float) -> str:
 @router.get("/v2/schemes", response_model=SchemeFlatListResponse)
 def list_schemes_flat(
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=5000),
     search: Optional[str] = None,
     scheme_type: Optional[str] = None,
+    source: Optional[str] = None,
     council_id: Optional[int] = None,
+    region: Optional[str] = Query(None, description="Filter by council region"),
+    sort_by: Optional[str] = Query(None, description="Sort field: name, units, scheme_type, postcode, council, owner, operator, min_rent"),
+    sort_dir: Optional[str] = Query("asc", description="Sort direction: asc or desc"),
+    has_owner: Optional[bool] = Query(None, description="Filter by owner presence"),
+    has_operator: Optional[bool] = Query(None, description="Filter by operator presence"),
+    has_rent: Optional[bool] = Query(None, description="Filter schemes that have any rent tier"),
+    min_units: Optional[int] = Query(None, description="Minimum units filter"),
+    max_units: Optional[int] = Query(None, description="Maximum units filter"),
+    min_rent_per_week: Optional[float] = Query(None, description="Minimum weekly rent filter"),
+    max_rent_per_week: Optional[float] = Query(None, description="Maximum weekly rent filter"),
+    contract_end_within_days: Optional[int] = Query(None, description="Contract ends within N days from now"),
+    operator_company_id: Optional[list[int]] = Query(None, description="Filter by operator company id(s) (repeatable)"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    from sqlalchemy import or_, func as sa_func
+    import datetime as _dt
+
     query = (
         db.query(ExistingScheme)
         .options(
@@ -739,23 +766,139 @@ def list_schemes_flat(
 
     if scheme_type is not None:
         query = query.filter(ExistingScheme.scheme_type == scheme_type)
+    if source is not None:
+        query = query.filter(ExistingScheme.source == source)
     if council_id is not None:
         query = query.filter(ExistingScheme.council_id == council_id)
+    if region is not None:
+        query = query.filter(ExistingScheme.council.has(Council.region == region))
+    if operator_company_id:
+        query = query.filter(ExistingScheme.operator_company_id.in_(operator_company_id))
+    if contract_end_within_days is not None and contract_end_within_days > 0:
+        today = _dt.date.today()
+        horizon = today + _dt.timedelta(days=contract_end_within_days)
+        query = query.filter(
+            ExistingScheme.contract_end_date.isnot(None),
+            ExistingScheme.contract_end_date >= today,
+            ExistingScheme.contract_end_date <= horizon,
+        )
     if search:
         like_term = f"%{search}%"
-        query = query.filter(
-            ExistingScheme.name.ilike(like_term)
-            | ExistingScheme.address.ilike(like_term)
-            | ExistingScheme.postcode.ilike(like_term)
+        # Check if the search term looks like a numeric scheme ID
+        search_conditions = [
+            ExistingScheme.name.ilike(like_term),
+            ExistingScheme.address.ilike(like_term),
+            ExistingScheme.postcode.ilike(like_term),
+            ExistingScheme.operator_company.has(Company.name.ilike(like_term)),
+            ExistingScheme.owner_company.has(Company.name.ilike(like_term)),
+            ExistingScheme.council.has(Council.name.ilike(like_term)),
+        ]
+        # Support exact scheme ID search for numeric terms
+        if search.strip().isdigit():
+            search_conditions.append(ExistingScheme.id == int(search.strip()))
+        query = query.filter(or_(*search_conditions))
+
+    if has_owner is True:
+        query = query.filter(ExistingScheme.owner_company_id.isnot(None))
+    elif has_owner is False:
+        query = query.filter(ExistingScheme.owner_company_id.is_(None))
+
+    if has_operator is True:
+        query = query.filter(ExistingScheme.operator_company_id.isnot(None))
+    elif has_operator is False:
+        query = query.filter(ExistingScheme.operator_company_id.is_(None))
+
+    if min_units is not None:
+        query = query.filter(ExistingScheme.num_units >= min_units)
+    if max_units is not None:
+        query = query.filter(ExistingScheme.num_units <= max_units)
+
+    # Per-scheme rent summary (min + count) as a subquery we can reuse
+    # for filtering, sorting, and response population.
+    rent_summary = (
+        db.query(
+            SchemeRent.scheme_id.label("sid"),
+            sa_func.min(SchemeRent.rent_per_week).label("min_rent_wk"),
+            sa_func.count(SchemeRent.id).label("rent_count"),
         )
+        .group_by(SchemeRent.scheme_id)
+        .subquery()
+    )
+
+    # has_rent / rent-range filters all require the subquery join
+    rent_join_applied = False
+    needs_rent_join = (
+        has_rent is True
+        or min_rent_per_week is not None
+        or max_rent_per_week is not None
+    )
+    if needs_rent_join:
+        query = query.join(rent_summary, rent_summary.c.sid == ExistingScheme.id)
+        rent_join_applied = True
+    elif has_rent is False:
+        query = query.outerjoin(
+            rent_summary, rent_summary.c.sid == ExistingScheme.id
+        ).filter(rent_summary.c.sid.is_(None))
+        rent_join_applied = True
+
+    if min_rent_per_week is not None:
+        query = query.filter(rent_summary.c.min_rent_wk >= min_rent_per_week)
+    if max_rent_per_week is not None:
+        query = query.filter(rent_summary.c.min_rent_wk <= max_rent_per_week)
 
     total = query.count()
+
+    # Server-side sorting
+    from sqlalchemy import desc as sa_desc, asc as sa_asc, nulls_last
+
+    sort_column = ExistingScheme.name  # default
+    if sort_by == "units":
+        sort_column = ExistingScheme.num_units
+    elif sort_by == "scheme_type":
+        sort_column = ExistingScheme.scheme_type
+    elif sort_by == "postcode":
+        sort_column = ExistingScheme.postcode
+    elif sort_by == "name":
+        sort_column = ExistingScheme.name
+    elif sort_by == "contract_end":
+        sort_column = ExistingScheme.contract_end_date
+    elif sort_by == "bd_score":
+        sort_column = ExistingScheme.num_units  # fallback; bd_score is computed
+    elif sort_by == "min_rent":
+        # Join the subquery if not already joined (outer to preserve schemes without rent)
+        if not rent_join_applied:
+            query = query.outerjoin(
+                rent_summary, rent_summary.c.sid == ExistingScheme.id
+            )
+            rent_join_applied = True
+        sort_column = rent_summary.c.min_rent_wk
+
+    if sort_dir == "desc":
+        query = query.order_by(nulls_last(sa_desc(sort_column)))
+    else:
+        query = query.order_by(nulls_last(sa_asc(sort_column)))
+
     items = (
-        query.order_by(ExistingScheme.name.asc())
-        .offset(skip)
+        query.offset(skip)
         .limit(limit)
         .all()
     )
+
+    # Fetch rent summaries for the page of results
+    rent_by_scheme: dict[int, tuple[Optional[float], int]] = {}
+    if items:
+        scheme_ids = [s.id for s in items]
+        rent_rows = (
+            db.query(
+                SchemeRent.scheme_id,
+                sa_func.min(SchemeRent.rent_per_week),
+                sa_func.count(SchemeRent.id),
+            )
+            .filter(SchemeRent.scheme_id.in_(scheme_ids))
+            .group_by(SchemeRent.scheme_id)
+            .all()
+        )
+        rent_by_scheme = {sid: (mn, cnt) for sid, mn, cnt in rent_rows}
 
     flat_items: list[SchemeFlat] = []
     for scheme in items:
@@ -787,6 +930,7 @@ def list_schemes_flat(
                     else None
                 ),
                 council=scheme.council.name if scheme.council else None,
+                region=scheme.council.region if scheme.council else None,
                 units=scheme.num_units,
                 contract_end=contract_end,
                 performance=scheme.performance_rating,
@@ -810,11 +954,131 @@ def list_schemes_flat(
                 score_breakdown=breakdown,
                 operator_company_id=str(scheme.operator_company_id) if scheme.operator_company_id else None,
                 pipeline_opportunity_id=str(scheme.pipeline_opportunity.id) if scheme.pipeline_opportunity else None,
+                locked_fields=scheme.locked_fields or {},
+                min_rent_per_week=rent_by_scheme.get(scheme.id, (None, 0))[0],
+                rent_tier_count=rent_by_scheme.get(scheme.id, (None, 0))[1],
             )
         )
 
     return SchemeFlatListResponse(
         items=flat_items, total=total, skip=skip, limit=limit
+    )
+
+
+# =========================================================================
+# 6a. PATCH /api/v2/schemes/{scheme_id}/field  (manual override + lock)
+# =========================================================================
+
+class SchemeFieldPatchRequest(BaseModel):
+    field: str
+    value: Any = None
+
+
+class SchemeFieldPatchResponse(BaseModel):
+    scheme_id: int
+    field: str
+    applied: bool
+    new_value: Any = None
+    locked_by: Optional[str] = None
+    message: str
+
+
+@router.patch("/v2/schemes/{scheme_id}/field", response_model=SchemeFieldPatchResponse)
+def patch_scheme_field(
+    scheme_id: int,
+    body: SchemeFieldPatchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Manually set a single field on a scheme and lock it to source='manual'.
+
+    Manual is the highest-precedence source — this write will always succeed
+    (provided validation passes) and prevents any scraper / AI enrichment
+    from overwriting until the user explicitly clears the lock.
+    """
+    from app.scrapers.field_protection import (
+        set_field,
+        FieldValidationError,
+        WRITABLE_FIELDS,
+        PROTECTED_FIELDS,
+    )
+
+    # Frontend-friendly aliases for company-name fields
+    ALIAS_MAP = {
+        "owner": "owner_company_id",
+        "operator": "operator_company_id",
+        "asset_manager": "asset_manager_company_id",
+        "landlord": "landlord_company_id",
+    }
+    field_to_write = ALIAS_MAP.get(body.field, body.field)
+
+    if field_to_write not in WRITABLE_FIELDS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Field not writable: {body.field!r}. Allowed aliases: {list(ALIAS_MAP)}, fields: {sorted(WRITABLE_FIELDS)}",
+        )
+
+    scheme = db.query(ExistingScheme).filter(ExistingScheme.id == scheme_id).first()
+    if not scheme:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scheme not found",
+        )
+
+    # Company-name patches: resolve / create Company, then set the _company_id FK
+    value_to_write = body.value
+    if body.field in ALIAS_MAP:
+        # field_to_write already resolved via ALIAS_MAP above
+        if body.value:
+            # Resolve or create a Company
+            name = str(body.value).strip()
+            norm = name.lower()
+            existing_co = (
+                db.query(Company)
+                .filter(Company.normalized_name == norm)
+                .first()
+            )
+            if existing_co:
+                value_to_write = existing_co.id
+            else:
+                new_co = Company(
+                    name=name[:255],
+                    normalized_name=norm[:255],
+                    company_type="Operator" if body.field == "operator" else "Developer",
+                    is_active=True,
+                )
+                db.add(new_co)
+                db.flush()
+                value_to_write = new_co.id
+        else:
+            value_to_write = None
+
+    try:
+        applied = set_field(
+            scheme, field_to_write, value_to_write,
+            source="manual", db=db,
+            changed_by=f"user:{current_user.email}",
+        )
+    except FieldValidationError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
+    db.commit()
+    db.refresh(scheme)
+
+    new_val = getattr(scheme, field_to_write, None)
+    lock_source = (scheme.locked_fields or {}).get(field_to_write)
+    return SchemeFieldPatchResponse(
+        scheme_id=scheme_id,
+        field=field_to_write,
+        applied=applied,
+        new_value=str(new_val) if new_val is not None else None,
+        locked_by=lock_source,
+        message=f"{'Applied' if applied else 'No-op (unchanged)'}"
+                + (f" and locked (manual)" if applied and field_to_write in PROTECTED_FIELDS else ""),
     )
 
 
@@ -882,6 +1146,271 @@ def get_scheme_contracts(
         ))
 
     return results
+
+
+# =========================================================================
+# 6c. GET /api/v2/schemes/{scheme_id}/rents
+# =========================================================================
+
+class SchemeRentFlat(BaseModel):
+    id: str
+    room_type: Optional[str] = None
+    rent_per_week: Optional[float] = None
+    rent_per_month: Optional[float] = None
+    currency: str = "GBP"
+    academic_year: Optional[str] = None
+    contract_length_weeks: Optional[int] = None
+    source: Optional[str] = None
+    scraped_at: Optional[str] = None
+
+
+@router.get("/v2/schemes/{scheme_id}/rents", response_model=list[SchemeRentFlat])
+def get_scheme_rents(
+    scheme_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return all rent tiers for a given scheme, cheapest first."""
+    rents = (
+        db.query(SchemeRent)
+        .filter(SchemeRent.scheme_id == scheme_id)
+        .order_by(
+            SchemeRent.academic_year.desc().nullslast(),
+            SchemeRent.rent_per_week.asc().nullslast(),
+        )
+        .all()
+    )
+    return [
+        SchemeRentFlat(
+            id=str(r.id),
+            room_type=r.room_type,
+            rent_per_week=r.rent_per_week,
+            rent_per_month=r.rent_per_month,
+            currency=r.currency or "GBP",
+            academic_year=r.academic_year,
+            contract_length_weeks=r.contract_length_weeks,
+            source=r.source,
+            scraped_at=r.scraped_at.isoformat() if r.scraped_at else None,
+        )
+        for r in rents
+    ]
+
+
+# =========================================================================
+# 6d1. GET /api/v2/schemes/{id}/competitors  (real competitors, not mocks)
+# =========================================================================
+
+class CompetitorFlat(BaseModel):
+    operator_id: int
+    operator_name: str
+    scheme_count: int
+    avg_units: Optional[float] = None
+    has_rent_data: bool = False
+    sample_scheme_name: Optional[str] = None
+    sample_scheme_id: Optional[str] = None
+
+
+@router.get("/v2/schemes/{scheme_id}/competitors", response_model=list[CompetitorFlat])
+def get_scheme_competitors(
+    scheme_id: int,
+    limit: int = Query(6, ge=1, le=20),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Return competing operators for a scheme — i.e. OTHER operators who run
+    schemes of the same scheme_type in the same region.
+
+    Not a full market-analysis feature; just surfaces who else you'd be
+    competing against for this kind of work in this area.
+    """
+    from sqlalchemy import func as sa_func, desc as sa_desc, and_
+
+    scheme = (
+        db.query(ExistingScheme)
+        .options(joinedload(ExistingScheme.council))
+        .filter(ExistingScheme.id == scheme_id)
+        .first()
+    )
+    if not scheme:
+        raise HTTPException(status_code=404, detail="Scheme not found")
+
+    scheme_type = scheme.scheme_type
+    region = scheme.council.region if scheme.council else None
+    own_operator_id = scheme.operator_company_id
+
+    if not scheme_type:
+        return []
+
+    conds = [
+        ExistingScheme.scheme_type == scheme_type,
+        ExistingScheme.operator_company_id.isnot(None),
+    ]
+    if own_operator_id:
+        conds.append(ExistingScheme.operator_company_id != own_operator_id)
+    if region:
+        # Prefer same-region competitors; fall back below if zero.
+        conds.append(ExistingScheme.council.has(Council.region == region))
+
+    def _aggregate(conditions):
+        return (
+            db.query(
+                Company.id,
+                Company.name,
+                sa_func.count(ExistingScheme.id).label("cnt"),
+                sa_func.avg(ExistingScheme.num_units).label("avg_u"),
+                sa_func.min(ExistingScheme.id).label("sample_id"),
+                sa_func.min(ExistingScheme.name).label("sample_name"),
+            )
+            .join(ExistingScheme, ExistingScheme.operator_company_id == Company.id)
+            .filter(and_(*conditions))
+            .group_by(Company.id, Company.name)
+            .order_by(sa_desc("cnt"))
+            .limit(limit)
+            .all()
+        )
+
+    rows = _aggregate(conds)
+    # If no region matches, broaden to the whole UK for that scheme type.
+    if not rows and region:
+        rows = _aggregate([c for c in conds if c is not conds[-1]] if len(conds) > 2 else conds[:2])
+
+    if not rows:
+        return []
+
+    # Figure out which operators have rent data (any scheme of theirs has a rent tier).
+    op_ids = [r[0] for r in rows]
+    rent_op_ids = set(
+        r[0] for r in db.query(ExistingScheme.operator_company_id)
+        .join(SchemeRent, SchemeRent.scheme_id == ExistingScheme.id)
+        .filter(ExistingScheme.operator_company_id.in_(op_ids))
+        .distinct()
+        .all()
+    )
+
+    results: list[CompetitorFlat] = []
+    for r in rows:
+        results.append(CompetitorFlat(
+            operator_id=r[0],
+            operator_name=r[1],
+            scheme_count=int(r[2] or 0),
+            avg_units=float(r[3]) if r[3] is not None else None,
+            has_rent_data=r[0] in rent_op_ids,
+            sample_scheme_id=str(r[4]) if r[4] else None,
+            sample_scheme_name=r[5],
+        ))
+    return results
+
+
+# =========================================================================
+# 6d. GET /api/v2/operators/autocomplete
+# =========================================================================
+
+class OperatorAutocompleteItem(BaseModel):
+    id: int
+    name: str
+    scheme_count: int
+
+
+@router.get("/v2/operators/autocomplete", response_model=list[OperatorAutocompleteItem])
+def autocomplete_operators(
+    q: str = Query("", description="Substring to match (case-insensitive)"),
+    limit: int = Query(10, ge=1, le=20),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return top operator companies matching ``q``, ranked by how many
+    schemes they operate. Empty q returns the top-N operators overall."""
+    from sqlalchemy import func as sa_func, desc as sa_desc
+
+    qn = db.query(
+        Company.id,
+        Company.name,
+        sa_func.count(ExistingScheme.id).label("scheme_count"),
+    ).join(
+        ExistingScheme, ExistingScheme.operator_company_id == Company.id
+    ).group_by(Company.id, Company.name)
+
+    if q:
+        qn = qn.filter(Company.name.ilike(f"%{q}%"))
+
+    rows = qn.order_by(sa_desc("scheme_count")).limit(limit).all()
+    return [
+        OperatorAutocompleteItem(id=r[0], name=r[1], scheme_count=int(r[2]))
+        for r in rows
+    ]
+
+
+# =========================================================================
+# 6e. GET /api/v2/schemes/filter-options
+# =========================================================================
+
+class FilterOptionCount(BaseModel):
+    value: str
+    count: int
+    label: Optional[str] = None
+
+
+class SchemesFilterOptions(BaseModel):
+    sources: list[FilterOptionCount]
+    scheme_types: list[FilterOptionCount]
+    regions: list[str]
+
+
+_SOURCE_LABELS = {
+    "epc_new_dwelling": "EPC New Dwelling",
+    "arl_btr_open_operating": "ARL BTR",
+    "pbsa_operator": "PBSA Operator",
+    "find_a_tender": "Find a Tender",
+    "contracts_finder": "Contracts Finder",
+    "rsh": "RSH",
+    "manual": "Manual",
+}
+
+
+@router.get("/v2/schemes/filter-options", response_model=SchemesFilterOptions)
+def get_schemes_filter_options(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return distinct values available for scheme filters (for dropdown
+    population). One row per (value, count)."""
+    from sqlalchemy import func as sa_func, desc as sa_desc
+
+    source_rows = (
+        db.query(ExistingScheme.source, sa_func.count(ExistingScheme.id))
+        .filter(ExistingScheme.source.isnot(None))
+        .group_by(ExistingScheme.source)
+        .order_by(sa_desc(sa_func.count(ExistingScheme.id)))
+        .all()
+    )
+    scheme_type_rows = (
+        db.query(ExistingScheme.scheme_type, sa_func.count(ExistingScheme.id))
+        .filter(ExistingScheme.scheme_type.isnot(None))
+        .group_by(ExistingScheme.scheme_type)
+        .order_by(sa_desc(sa_func.count(ExistingScheme.id)))
+        .all()
+    )
+    region_rows = (
+        db.query(Council.region)
+        .filter(Council.region.isnot(None))
+        .distinct()
+        .order_by(Council.region)
+        .all()
+    )
+    return SchemesFilterOptions(
+        sources=[
+            FilterOptionCount(
+                value=src, count=int(cnt), label=_SOURCE_LABELS.get(src, src),
+            )
+            for src, cnt in source_rows
+        ],
+        scheme_types=[
+            FilterOptionCount(value=t, count=int(cnt), label=t)
+            for t, cnt in scheme_type_rows
+        ],
+        regions=[r[0] for r in region_rows if r[0]],
+    )
 
 
 # =========================================================================
@@ -1336,6 +1865,9 @@ def list_companies_adapted(
                 Company.name.ilike(pattern),
                 Company.normalized_name.ilike(pattern),
                 Company.companies_house_number.ilike(pattern),
+                Company.registered_address.ilike(pattern),
+                Company.website.ilike(pattern),
+                Company.company_type.ilike(pattern),
             )
         )
 
@@ -1584,7 +2116,10 @@ def list_contracts_flat(
         query = query.filter(
             or_(
                 SchemeContract.contract_reference.ilike(pattern),
+                SchemeContract.contract_type.ilike(pattern),
                 SchemeContract.scheme.has(ExistingScheme.name.ilike(pattern)),
+                SchemeContract.scheme.has(ExistingScheme.postcode.ilike(pattern)),
+                SchemeContract.scheme.has(ExistingScheme.council.has(Council.name.ilike(pattern))),
                 SchemeContract.operator_company.has(Company.name.ilike(pattern)),
                 SchemeContract.client_company.has(Company.name.ilike(pattern)),
             )

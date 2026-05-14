@@ -161,6 +161,9 @@ def list_companies(
                 Company.name.ilike(pattern),
                 Company.normalized_name.ilike(pattern),
                 Company.companies_house_number.ilike(pattern),
+                Company.registered_address.ilike(pattern),
+                Company.website.ilike(pattern),
+                Company.company_type.ilike(pattern),
             )
         )
 

@@ -130,11 +130,8 @@ export default function CompaniesPage() {
   const totalContacts = companies.reduce((sum, c) => sum + (c.contacts_count ?? 0), 0);
   const duplicateCompanies = companies.filter((c) => c.duplicates && c.duplicates.length > 0).length;
 
-  const filtered = companies.filter((c) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return (c.name || '').toLowerCase().includes(q) || (c.type || '').toLowerCase().includes(q) || (c.companies_house_number || '').includes(q);
-  });
+  // Filtering is done server-side via API params
+  const filtered = companies;
 
   const handleMerge = () => {
     if (mergeModal) {
@@ -202,7 +199,7 @@ export default function CompaniesPage() {
       </div>
 
       <div className="flex items-center gap-3">
-        <SearchInput placeholder="Search company name, type, or CH number..." onChange={setSearch} className="w-96" />
+        <SearchInput placeholder="Search by name, company type, CH number, address, website..." onChange={setSearch} className="w-96" />
         <span className="ml-auto text-sm text-slate-500">{filtered.length} companies</span>
       </div>
 

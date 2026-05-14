@@ -21,6 +21,13 @@ import SearchInput from '@/components/ui/SearchInput';
 import Select from '@/components/ui/Select';
 import Modal from '@/components/ui/Modal';
 import PermissionGate from '@/components/rbac/PermissionGate';
+import AIEnrichPanel from '@/components/AIEnrichPanel';
+import InlineFieldEdit from '@/components/InlineFieldEdit';
+import FilterPanel, { SchemeFilters, DEFAULT_FILTERS, countActiveFilters } from '@/components/schemes/FilterPanel';
+import ActiveFilterPills from '@/components/schemes/ActiveFilterPills';
+import { getSchemesFilterOptions, SchemesFilterOptions } from '@/lib/api';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { AdjustmentsHorizontalIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
 
@@ -53,7 +60,116 @@ interface SchemeRow {
   };
   operator_company_id: string | null;
   pipeline_opportunity_id: string | null;
+  locked_fields: Record<string, string>;
+  min_rent_per_week: number | null;
+  rent_tier_count: number;
+  region: string | null;
 }
+
+// Rent timeline component for scheme details
+interface RentRecord {
+  id: string;
+  room_type: string | null;
+  rent_per_week: number | null;
+  rent_per_month: number | null;
+  currency: string;
+  academic_year: string | null;
+  contract_length_weeks: number | null;
+  source: string | null;
+}
+
+function RentPanel({ schemeId }: { schemeId: string }) {
+  const [rents, setRents] = React.useState<RentRecord[]>([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    api.get(`/v2/schemes/${schemeId}/rents`)
+      .then(res => {
+        setRents(res.data || []);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [schemeId]);
+
+  if (loading) return <div className="mt-4 text-xs text-slate-500">Loading rents...</div>;
+  if (rents.length === 0) return null;
+
+  // Group by academic year; keep null-year group last
+  const byYear = new Map<string, RentRecord[]>();
+  for (const r of rents) {
+    const key = r.academic_year || 'Unknown';
+    if (!byYear.has(key)) byYear.set(key, []);
+    byYear.get(key)!.push(r);
+  }
+  const years = Array.from(byYear.keys()).sort((a, b) => {
+    if (a === 'Unknown') return 1;
+    if (b === 'Unknown') return -1;
+    return b.localeCompare(a);
+  });
+
+  return (
+    <div className="mt-6">
+      <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+        <span className="w-1 h-4 bg-amber-500 rounded-full" />
+        Rent Tiers ({rents.length})
+      </h4>
+      <div className="space-y-4">
+        {years.map(year => {
+          const yearRents = byYear.get(year)!
+            .slice()
+            .sort((a, b) => (a.rent_per_week ?? Infinity) - (b.rent_per_week ?? Infinity));
+          return (
+            <div key={year}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  {year === 'Unknown' ? 'Unspecified year' : `Academic year ${year}`}
+                </span>
+                <span className="text-[10px] text-slate-600">· {yearRents.length} tier{yearRents.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {yearRents.map(r => (
+                  <div
+                    key={r.id}
+                    className="flex items-center justify-between rounded-lg bg-slate-700/30 border border-slate-700/50 px-3 py-2"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium text-white truncate">
+                        {r.room_type || 'Room'}
+                      </p>
+                      {r.contract_length_weeks && (
+                        <p className="text-[10px] text-slate-500">
+                          {r.contract_length_weeks}-week tenancy
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex-shrink-0 text-right ml-3">
+                      {r.rent_per_week != null && (
+                        <div className="text-sm font-semibold text-amber-300">
+                          £{r.rent_per_week.toFixed(0)}
+                          <span className="text-[10px] text-slate-500 font-normal">/wk</span>
+                        </div>
+                      )}
+                      {r.rent_per_month != null && (
+                        <div className="text-sm font-semibold text-amber-300">
+                          £{r.rent_per_month.toFixed(0)}
+                          <span className="text-[10px] text-slate-500 font-normal">/mo</span>
+                        </div>
+                      )}
+                      {r.source && (
+                        <div className="text-[9px] text-slate-600 mt-0.5">{r.source}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 
 // Contract timeline component for scheme details
 interface ContractRecord {
@@ -145,14 +261,192 @@ function ContractTimeline({ schemeId }: { schemeId: string }) {
   );
 }
 
-// Competitor and approach data used in detail panels (enriched by API when available)
-const competitorMock: Record<string, { name: string; strength: string; weakness: string }[]> = {};
-const defaultCompetitors = [
-  { name: 'JLL Living', strength: 'National coverage and brand recognition', weakness: 'Higher fee structure than regional operators' },
-  { name: 'Savills Management', strength: 'Strong institutional relationships', weakness: 'Less agile in operational innovation' },
+// BD Score Breakdown — calibrated, labelled bars with tooltips
+interface ScoreDim {
+  key: keyof SchemeRow['score_breakdown'];
+  label: string;
+  tooltip: string;
+  // Is this dimension populated for the current scheme? (used to show "No data" rather than the default 50)
+  hasDataFor: (s: SchemeRow) => boolean;
+  // Direction: "higher is more BD opportunity" (red=high) vs "higher is better for us" (green=high)
+  direction: 'opportunity' | 'strength';
+}
+
+const SCORE_DIMENSIONS: ScoreDim[] = [
+  {
+    key: 'contract_proximity',
+    label: 'Contract proximity',
+    tooltip: 'How soon the current contract ends. Higher = closer to renewal = bigger BD opportunity.',
+    hasDataFor: (s) => Boolean(s.contract_end),
+    direction: 'opportunity',
+  },
+  {
+    key: 'performance_gap',
+    label: 'Performance gap',
+    tooltip: 'Inverse of the current operator\'s performance rating. Higher = operator underperforming = BD opportunity.',
+    hasDataFor: (s) => s.performance !== null,
+    direction: 'opportunity',
+  },
+  {
+    key: 'market_opportunity',
+    label: 'Market opportunity',
+    tooltip: 'Inverse of resident satisfaction. Higher = unhappy residents = BD opportunity.',
+    hasDataFor: (s) => s.satisfaction !== null,
+    direction: 'opportunity',
+  },
+  {
+    key: 'relationship_strength',
+    label: 'Financial health',
+    tooltip: 'Operator\'s financial health score. Higher = healthier (less risky relationship).',
+    hasDataFor: (s) => s.score_breakdown.relationship_strength !== 50,
+    direction: 'strength',
+  },
+  {
+    key: 'scheme_size',
+    label: 'Scheme size',
+    tooltip: 'Derived from unit count (>500 = 100, >200 = 70, >100 = 50, else 30). Bigger scheme = bigger BD prize.',
+    hasDataFor: (s) => s.units !== null,
+    direction: 'opportunity',
+  },
 ];
-const approachMock: Record<string, string> = {};
-const defaultApproach = 'Begin with market research to understand the current operator landscape and identify specific pain points. Develop a tailored value proposition highlighting our operational excellence, technology platform, and resident satisfaction track record. Schedule introductory meetings with key stakeholders within 30 days.';
+
+function barColor(val: number, direction: 'opportunity' | 'strength'): string {
+  // For "opportunity" dims: high (red) = big opportunity for us.
+  // For "strength"  dims: high (green) = strong position.
+  if (direction === 'opportunity') {
+    if (val > 70) return 'bg-gradient-to-r from-red-600 to-red-400';
+    if (val > 40) return 'bg-gradient-to-r from-amber-600 to-amber-400';
+    return 'bg-gradient-to-r from-slate-600 to-slate-500';
+  }
+  if (val > 70) return 'bg-gradient-to-r from-emerald-600 to-emerald-400';
+  if (val > 40) return 'bg-gradient-to-r from-amber-600 to-amber-400';
+  return 'bg-gradient-to-r from-red-600 to-red-400';
+}
+
+interface Competitor {
+  operator_id: number;
+  operator_name: string;
+  scheme_count: number;
+  avg_units: number | null;
+  has_rent_data: boolean;
+  sample_scheme_name: string | null;
+  sample_scheme_id: string | null;
+}
+
+function CompetitorPanel({
+  scheme,
+  onFilterBy,
+}: {
+  scheme: SchemeRow;
+  onFilterBy: (c: Competitor) => void;
+}) {
+  const [competitors, setCompetitors] = React.useState<Competitor[]>([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    api.get(`/v2/schemes/${scheme.id}/competitors`)
+      .then(res => { setCompetitors(res.data || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [scheme.id]);
+
+  return (
+    <div className="space-y-4">
+      <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+        <span className="w-1 h-4 bg-amber-500 rounded-full" />
+        Competing Operators
+        <span className="text-[10px] text-slate-500 font-normal ml-1">
+          {scheme.scheme_type} in {scheme.region || scheme.council || 'this area'}
+        </span>
+      </h4>
+      {loading && (
+        <div className="text-xs text-slate-500">Loading competitors...</div>
+      )}
+      {!loading && competitors.length === 0 && (
+        <div className="text-xs text-slate-500 italic">
+          No other operators found for {scheme.scheme_type} schemes in this region.
+        </div>
+      )}
+      {!loading && competitors.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[10px] text-slate-500 italic">Click an operator to filter schemes by it</p>
+          {competitors.map((c) => (
+            <button
+              key={c.operator_id}
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onFilterBy(c); }}
+              className="w-full text-left bg-slate-700/30 rounded-lg p-3 border border-slate-700/50 hover:bg-slate-700/60 hover:border-amber-500/40 transition-colors group"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-white truncate group-hover:text-amber-200">{c.operator_name}</p>
+                <div className="flex-shrink-0 flex items-center gap-1.5">
+                  {c.has_rent_data && (
+                    <span className="text-[9px] bg-amber-500/15 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded-full">£ rent</span>
+                  )}
+                  <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">
+                    {c.scheme_count} {c.scheme_count === 1 ? 'scheme' : 'schemes'}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 mt-1.5 text-[10px] text-slate-500">
+                {c.avg_units !== null && (
+                  <span>Avg {Math.round(c.avg_units)} units/scheme</span>
+                )}
+                {c.sample_scheme_name && (
+                  <span className="truncate">e.g. {c.sample_scheme_name}</span>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function BDScoreBreakdown({ scheme }: { scheme: SchemeRow }) {
+  const breakdown = scheme.score_breakdown;
+  return (
+    <div className="space-y-4">
+      <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+        <span className="w-1 h-4 bg-violet-500 rounded-full" />
+        BD Score Breakdown
+      </h4>
+      <div className="space-y-2.5">
+        {SCORE_DIMENSIONS.map((dim) => {
+          const val = breakdown[dim.key] as number;
+          const missing = !dim.hasDataFor(scheme);
+          const displayVal = missing ? null : Math.round(val);
+          return (
+            <div key={dim.key} title={dim.tooltip}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px] text-slate-400 flex items-center gap-1 cursor-help">
+                  {dim.label}
+                  <span className="text-slate-600">ⓘ</span>
+                </span>
+                <span className="text-[11px] font-semibold text-slate-300">
+                  {displayVal === null ? <span className="text-slate-600 italic font-normal">No data</span> : `${displayVal}/100`}
+                </span>
+              </div>
+              <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                {displayVal !== null && (
+                  <div
+                    className={cn('h-full rounded-full transition-all duration-700', barColor(val, dim.direction))}
+                    style={{ width: `${val}%` }}
+                  />
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[10px] text-slate-500 leading-relaxed pt-1 border-t border-slate-700/50">
+        Overall BD score weights: Contract proximity 35%, Performance gap 25%, Market opportunity 15%,
+        Financial health 15%, Scheme size 10%.
+      </p>
+    </div>
+  );
+}
 
 // Ring/gauge component for performance and satisfaction
 function GaugeRing({ value, size = 36, strokeWidth = 3, color }: { value: number | null; size?: number; strokeWidth?: number; color: string }) {
@@ -377,18 +671,154 @@ function AddToPipelineModal({ scheme, isOpen, onClose, onSuccess }: {
   );
 }
 
+function paramsToFilters(sp: URLSearchParams): SchemeFilters {
+  const triState = (v: string | null): 'any' | 'yes' | 'no' =>
+    v === 'yes' || v === 'no' ? v : 'any';
+  return {
+    search: sp.get('search') || '',
+    scheme_type: sp.get('scheme_type') || '',
+    source: sp.get('source') || '',
+    region: sp.get('region') || '',
+    council_id: sp.get('council_id') || '',
+    has_owner: triState(sp.get('has_owner')),
+    has_operator: triState(sp.get('has_operator')),
+    has_rent: triState(sp.get('has_rent')),
+    min_units: sp.get('min_units') || '',
+    max_units: sp.get('max_units') || '',
+    min_rent: sp.get('min_rent') || '',
+    max_rent: sp.get('max_rent') || '',
+    operator_ids: sp.getAll('operator_id').map(s => Number(s)).filter(n => !Number.isNaN(n)),
+    contract_end_within_days: sp.get('contract_end_within_days') || '',
+  };
+}
+
+function filtersToURLSearchParams(f: SchemeFilters): URLSearchParams {
+  const p = new URLSearchParams();
+  if (f.search) p.set('search', f.search);
+  if (f.scheme_type) p.set('scheme_type', f.scheme_type);
+  if (f.source) p.set('source', f.source);
+  if (f.region) p.set('region', f.region);
+  if (f.council_id) p.set('council_id', f.council_id);
+  if (f.has_owner !== 'any') p.set('has_owner', f.has_owner);
+  if (f.has_operator !== 'any') p.set('has_operator', f.has_operator);
+  if (f.has_rent !== 'any') p.set('has_rent', f.has_rent);
+  if (f.min_units) p.set('min_units', f.min_units);
+  if (f.max_units) p.set('max_units', f.max_units);
+  if (f.min_rent) p.set('min_rent', f.min_rent);
+  if (f.max_rent) p.set('max_rent', f.max_rent);
+  if (f.contract_end_within_days) p.set('contract_end_within_days', f.contract_end_within_days);
+  for (const id of f.operator_ids) p.append('operator_id', String(id));
+  return p;
+}
+
+function triStateToBool(v: 'any' | 'yes' | 'no'): string | null {
+  if (v === 'yes') return 'true';
+  if (v === 'no') return 'false';
+  return null;
+}
+
 export default function SchemesPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
   const [schemes, setSchemes] = useState<SchemeRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('bd_score');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [typeFilter, setTypeFilter] = useState('');
-  const [councilFilter, setCouncilFilter] = useState('');
-  const [councilOptions, setCouncilOptions] = useState<{ value: string; label: string }[]>([]);
   const [pipelineModalScheme, setPipelineModalScheme] = useState<SchemeRow | null>(null);
+  const [page, setPage] = useState(0);
+  const [totalSchemes, setTotalSchemes] = useState(0);
+  const PAGE_SIZE = 100;
 
-  // Load councils-with-schemes once for the filter dropdown
+  // Initialise filters from URL
+  const [filters, setFiltersState] = useState<SchemeFilters>(() =>
+    paramsToFilters(searchParams ?? new URLSearchParams())
+  );
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [filterOptions, setFilterOptions] = useState<SchemesFilterOptions | null>(null);
+  const [operatorLabels, setOperatorLabels] = useState<Record<number, string>>({});
+
+  const setFilters = React.useCallback((partial: Partial<SchemeFilters>) => {
+    setFiltersState(prev => {
+      // Cheap equality check so setting the same value is a no-op
+      let changed = false;
+      for (const k of Object.keys(partial) as Array<keyof SchemeFilters>) {
+        const nv = partial[k];
+        const pv = prev[k];
+        if (Array.isArray(nv) && Array.isArray(pv)) {
+          if (nv.length !== pv.length || nv.some((v, i) => v !== pv[i])) {
+            changed = true; break;
+          }
+        } else if (nv !== pv) {
+          changed = true; break;
+        }
+      }
+      if (!changed) return prev;
+
+      const next = { ...prev, ...partial };
+      const sp = filtersToURLSearchParams(next);
+      const qs = sp.toString();
+      router.replace(qs ? `/schemes?${qs}` : '/schemes', { scroll: false });
+      return next;
+    });
+    // Reset pagination in the same tick (React 18 batches these)
+    setPage(0);
+  }, [router]);
+
+  // Stable, memoised handlers for the top-row controls so they don't
+  // re-subscribe child effects (e.g. SearchInput's debounce) on every render.
+  const handleSearchChange = React.useCallback((v: string) => {
+    setFilters({ search: v });
+  }, [setFilters]);
+  const handleTypeChange = React.useCallback((v: string) => {
+    setFilters({ scheme_type: v });
+  }, [setFilters]);
+  const toggleHasRent = React.useCallback(() => {
+    setFiltersState(prev => {
+      const newVal = prev.has_rent === 'yes' ? 'any' : 'yes';
+      if (prev.has_rent === newVal) return prev;
+      const next = { ...prev, has_rent: newVal as 'yes' | 'any' };
+      const sp = filtersToURLSearchParams(next);
+      const qs = sp.toString();
+      router.replace(qs ? `/schemes?${qs}` : '/schemes', { scroll: false });
+      return next;
+    });
+    setPage(0);
+  }, [router]);
+  const clearAllFilters = React.useCallback(() => {
+    setFilters(DEFAULT_FILTERS);
+  }, [setFilters]);
+
+  const handleFilterByCompetitor = React.useCallback((sourceScheme: SchemeRow, c: Competitor) => {
+    // Register operator name so the pill shows nicely
+    setOperatorLabels(prev => ({ ...prev, [c.operator_id]: c.operator_name }));
+    setFilters({
+      operator_ids: [c.operator_id],
+      scheme_type: sourceScheme.scheme_type || '',
+      region: sourceScheme.region || '',
+      // Clear search so we're not still scoped to the source scheme
+      search: '',
+    });
+    setExpandedId(null);
+    setPanelOpen(false);
+    // Scroll to top so the user sees the filtered results
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [setFilters]);
+
+  // Lazy-load filter options when panel first opens
+  useEffect(() => {
+    if (panelOpen && !filterOptions) {
+      getSchemesFilterOptions()
+        .then(setFilterOptions)
+        .catch(() => setFilterOptions({ sources: [], scheme_types: [], regions: [] }));
+    }
+  }, [panelOpen, filterOptions]);
+
+  // Load council options once for the top-row council filter
+  const [councilOptions, setCouncilOptions] = useState<{ value: string; label: string }[]>([]);
   useEffect(() => {
     api.get('/v2/scheme-councils')
       .then(res => {
@@ -400,16 +830,53 @@ export default function SchemesPage() {
       })
       .catch(() => {});
   }, []);
+  const handleCouncilChange = React.useCallback((v: string) => {
+    setFilters({ council_id: v });
+  }, [setFilters]);
 
+  // Backfill operator labels for any IDs in the URL that we don't have names for
   useEffect(() => {
-    const params: Record<string, string> = { limit: '500' };
-    if (search) params.search = search;
-    if (typeFilter) params.scheme_type = typeFilter;
-    if (councilFilter) params.council_id = councilFilter;
+    const missing = filters.operator_ids.filter(id => !operatorLabels[id]);
+    if (missing.length === 0) return;
+    // Use the autocomplete endpoint with empty query to just get top operators,
+    // or skip and let user see #id. Simpler: show #id until clicked.
+  }, [filters.operator_ids, operatorLabels]);
 
-    api.get('/v2/schemes', { params })
+  const fetchSchemes = React.useCallback(() => {
+    setLoading(true);
+    const params: Record<string, string | string[]> = {
+      limit: String(PAGE_SIZE),
+      skip: String(page * PAGE_SIZE),
+    };
+    if (filters.search) params.search = filters.search;
+    if (filters.scheme_type) params.scheme_type = filters.scheme_type;
+    if (filters.source) params.source = filters.source;
+    if (filters.region) params.region = filters.region;
+    if (filters.council_id) params.council_id = filters.council_id;
+    const hasOwnerBool = triStateToBool(filters.has_owner);
+    if (hasOwnerBool !== null) params.has_owner = hasOwnerBool;
+    const hasOperatorBool = triStateToBool(filters.has_operator);
+    if (hasOperatorBool !== null) params.has_operator = hasOperatorBool;
+    const hasRentBool = triStateToBool(filters.has_rent);
+    if (hasRentBool !== null) params.has_rent = hasRentBool;
+    if (filters.min_units) params.min_units = filters.min_units;
+    if (filters.max_units) params.max_units = filters.max_units;
+    if (filters.min_rent) params.min_rent_per_week = filters.min_rent;
+    if (filters.max_rent) params.max_rent_per_week = filters.max_rent;
+    if (filters.contract_end_within_days) params.contract_end_within_days = filters.contract_end_within_days;
+    if (filters.operator_ids.length > 0) {
+      params.operator_company_id = filters.operator_ids.map(String);
+    }
+    // Server-side sort
+    if (['units', 'name', 'scheme_type', 'postcode', 'contract_end', 'min_rent'].includes(sortBy)) {
+      params.sort_by = sortBy;
+      params.sort_dir = sortDir;
+    }
+
+    api.get('/v2/schemes', { params, paramsSerializer: { indexes: null } })
       .then(res => {
         const data = res.data;
+        setTotalSchemes(data?.total ?? 0);
         const items: SchemeRow[] = (Array.isArray(data) ? data : data?.items || []).map((s: any) => ({
           id: s.id || '',
           name: s.name || 'Unnamed Scheme',
@@ -436,32 +903,48 @@ export default function SchemesPage() {
           },
           operator_company_id: s.operator_company_id ?? null,
           pipeline_opportunity_id: s.pipeline_opportunity_id ?? null,
+          locked_fields: s.locked_fields ?? {},
+          min_rent_per_week: s.min_rent_per_week ?? null,
+          rent_tier_count: s.rent_tier_count ?? 0,
+          region: s.region ?? null,
         }));
         setSchemes(items);
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [search, typeFilter, councilFilter]);
+  }, [filters, page, sortBy, sortDir]);
+
+  useEffect(() => {
+    fetchSchemes();
+  }, [fetchSchemes]);
+  // Note: page is reset inside setFilters / setFiltersState callbacks, not a
+  // separate effect, to avoid a second render + duplicate fetch per filter change.
+
+  const handleSort = (field: string) => {
+    if (sortBy === field) {
+      setSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(field);
+      setSortDir(field === 'units' || field === 'bd_score' ? 'desc' : 'asc');
+    }
+  };
 
   const sortedSchemes = [...schemes]
-    .filter((s) => {
-      if (typeFilter && s.scheme_type !== typeFilter) return false;
-      if (!search) return true;
-      const q = search.toLowerCase();
-      return s.name.toLowerCase().includes(q) || s.operator.toLowerCase().includes(q) || s.council.toLowerCase().includes(q);
-    })
     .sort((a, b) => {
-      if (sortBy === 'bd_score') return (b.bd_score ?? 0) - (a.bd_score ?? 0);
-      if (sortBy === 'contract_end') {
-        const aTime = a.contract_end ? new Date(a.contract_end).getTime() : Infinity;
-        const bTime = b.contract_end ? new Date(b.contract_end).getTime() : Infinity;
-        return aTime - bTime;
+      // Client-side sort for bd_score, performance (not server-sorted)
+      if (sortBy === 'bd_score') {
+        const diff = (b.bd_score ?? -1) - (a.bd_score ?? -1);
+        return sortDir === 'asc' ? -diff : diff;
       }
-      if (sortBy === 'performance') return (a.performance ?? 999) - (b.performance ?? 999);
+      if (sortBy === 'performance') {
+        const diff = (a.performance ?? -1) - (b.performance ?? -1);
+        return sortDir === 'asc' ? diff : -diff;
+      }
+      // Server-sorted fields (units, name, scheme_type, postcode, contract_end): return as-is
       return 0;
     });
 
-  const totalSchemesCount = schemes.length;
+  const totalSchemesCount = totalSchemes;
   const totalUnits = schemes.reduce((sum, s) => sum + (s.units ?? 0), 0);
   const schemesWithBd = schemes.filter((s) => s.bd_score !== null);
   const avgBdScore = schemesWithBd.length > 0 ? Math.round(schemesWithBd.reduce((sum, s) => sum + (s.bd_score ?? 0), 0) / schemesWithBd.length) : 0;
@@ -471,10 +954,15 @@ export default function SchemesPage() {
     return days !== null && days > 0 && days < 180;
   }).length;
 
-  // Dynamic scheme type options from actual data
-  const schemeTypeOptions = Array.from(new Set(schemes.map((s) => s.scheme_type).filter(Boolean)))
-    .sort()
-    .map((t) => ({ value: t, label: t }));
+  const totalPages = Math.ceil(totalSchemes / PAGE_SIZE);
+
+  // Scheme type options: prefer filter-options endpoint (full catalog); fall back
+  // to the types present in the currently loaded page.
+  const schemeTypeOptions = filterOptions?.scheme_types?.length
+    ? filterOptions.scheme_types.map((t) => ({ value: t.value, label: t.label || t.value }))
+    : Array.from(new Set(schemes.map((s) => s.scheme_type).filter(Boolean)))
+        .sort()
+        .map((t) => ({ value: t, label: t }));
 
   // Risk Matrix data
   const riskMatrixSchemes = schemes.map((s) => {
@@ -625,39 +1113,84 @@ export default function SchemesPage() {
       </Card>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <SearchInput placeholder="Search schemes, operators, councils..." onChange={setSearch} className="w-72" />
-        <Select
-          options={[
-            { value: 'bd_score', label: 'Sort by BD Score' },
-            { value: 'contract_end', label: 'Sort by Contract End' },
-            { value: 'performance', label: 'Sort by Performance' },
-          ]}
-          value={sortBy}
-          onChange={setSortBy}
-          className="w-52"
-        />
-        <Select
-          options={schemeTypeOptions}
-          value={typeFilter}
-          onChange={setTypeFilter}
-          placeholder="All Types"
-          className="w-48"
-        />
-        <Select
-          options={councilOptions}
-          value={councilFilter}
-          onChange={setCouncilFilter}
-          placeholder="All Councils"
-          className="w-56"
-        />
-        {(typeFilter || search || councilFilter) && (
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <SearchInput
+            placeholder="Search by name, operator, owner, postcode, council, address..."
+            onChange={handleSearchChange}
+            className="w-80"
+          />
+          <Select
+            options={schemeTypeOptions}
+            value={filters.scheme_type}
+            onChange={handleTypeChange}
+            placeholder="All Types"
+            className="w-48"
+          />
+          <Select
+            options={councilOptions}
+            value={filters.council_id}
+            onChange={handleCouncilChange}
+            placeholder="All Councils"
+            className="w-56"
+          />
           <button
-            onClick={() => { setTypeFilter(''); setSearch(''); setCouncilFilter(''); }}
-            className="text-xs text-slate-400 hover:text-white px-2 py-1"
+            onClick={toggleHasRent}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
+              filters.has_rent === 'yes'
+                ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+            )}
+            title="Only show schemes with rent data"
           >
-            Clear filters
+            £ Has rent data
           </button>
+          <button
+            onClick={() => setPanelOpen(v => !v)}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
+              panelOpen || countActiveFilters(filters) > 0
+                ? 'bg-blue-500/15 border-blue-500/40 text-blue-300'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+            )}
+          >
+            <AdjustmentsHorizontalIcon className="w-4 h-4" />
+            More filters
+            {countActiveFilters(filters) > 0 && (
+              <span className="ml-0.5 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 text-[10px] font-semibold bg-blue-500 text-white rounded-full">
+                {countActiveFilters(filters)}
+              </span>
+            )}
+          </button>
+          {countActiveFilters(filters) > 0 && (
+            <button
+              onClick={clearAllFilters}
+              className="text-xs text-slate-400 hover:text-white px-2 py-1"
+            >
+              Clear all
+            </button>
+          )}
+          <span className="text-xs text-slate-500 ml-auto">
+            Showing {schemes.length} of {totalSchemes.toLocaleString()} schemes
+            {totalPages > 1 && ` (page ${page + 1} of ${totalPages})`}
+          </span>
+        </div>
+
+        <ActiveFilterPills
+          filters={filters}
+          setFilters={setFilters}
+          operatorLabels={operatorLabels}
+        />
+
+        {panelOpen && (
+          <FilterPanel
+            filters={filters}
+            setFilters={setFilters}
+            filterOptions={filterOptions}
+            operatorLabels={operatorLabels}
+            setOperatorLabels={setOperatorLabels}
+          />
         )}
       </div>
 
@@ -668,14 +1201,29 @@ export default function SchemesPage() {
             <thead>
               <tr className="border-b border-slate-700">
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase w-8"></th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase">Name</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('name')}>
+                  Name {sortBy === 'name' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase">Operator</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase">Type</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase">Units</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase">Contract End</th>
-                <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase">Perf.</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('scheme_type')}>
+                  Type {sortBy === 'scheme_type' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('units')}>
+                  Units {sortBy === 'units' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('contract_end')}>
+                  Contract End {sortBy === 'contract_end' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('min_rent')}>
+                  From £/wk {sortBy === 'min_rent' && <span className="text-amber-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                </th>
+                <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('performance')}>
+                  Perf. {sortBy === 'performance' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                </th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase">Satisf.</th>
-                <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase">BD Score</th>
+                <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('bd_score')}>
+                  BD Score {sortBy === 'bd_score' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                </th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase">Trend</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase">Priority</th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase">Actions</th>
@@ -722,6 +1270,19 @@ export default function SchemesPage() {
                           </div>
                         ) : (
                           <span className="text-xs text-slate-500">Not set</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {scheme.min_rent_per_week !== null ? (
+                          <div>
+                            <span className="text-sm font-semibold text-amber-300">£{scheme.min_rent_per_week.toFixed(0)}</span>
+                            <span className="text-[10px] text-slate-500 ml-1">/wk</span>
+                            {scheme.rent_tier_count > 1 && (
+                              <div className="text-[10px] text-slate-500">{scheme.rent_tier_count} tiers</div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-600">--</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">
@@ -787,7 +1348,7 @@ export default function SchemesPage() {
                     {/* Expanded row */}
                     {expandedId === scheme.id && (
                       <tr>
-                        <td colSpan={12} className="px-8 py-6 bg-slate-800/60">
+                        <td colSpan={13} className="px-8 py-6 bg-slate-800/60">
                           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                             {/* Scheme Details */}
                             <div className="space-y-4">
@@ -796,88 +1357,79 @@ export default function SchemesPage() {
                                 Scheme Details
                               </h4>
                               <div className="space-y-2 text-sm">
-                                <div className="flex justify-between"><span className="text-slate-500">Address</span><span className="text-slate-300 text-right text-xs">{scheme.address || '--'}</span></div>
-                                <div className="flex justify-between"><span className="text-slate-500">Postcode</span><span className="text-slate-300 font-mono text-xs">{scheme.postcode || '--'}</span></div>
-                                <div className="flex justify-between"><span className="text-slate-500">Owner</span><span className="text-slate-300 text-right text-xs">{scheme.owner || '--'}</span></div>
-                                <div className="flex justify-between"><span className="text-slate-500">Asset Manager</span><span className="text-slate-300 text-right text-xs">{scheme.asset_manager || '--'}</span></div>
-                                <div className="flex justify-between"><span className="text-slate-500">Landlord</span><span className="text-slate-300 text-right text-xs">{scheme.landlord || '--'}</span></div>
-                                <div className="flex justify-between"><span className="text-slate-500">Occupancy Rate</span><span className="text-slate-300">{scheme.occupancy_rate !== null ? `${scheme.occupancy_rate}%` : '--'}</span></div>
-                                <div className="flex justify-between"><span className="text-slate-500">Revenue/Unit</span><span className="text-slate-300">{scheme.revenue_per_unit !== null ? `£${scheme.revenue_per_unit}/mo` : '--'}</span></div>
-                                <div className="flex justify-between"><span className="text-slate-500">Contract Start</span><span className="text-slate-300">{scheme.contract_start ? formatDate(scheme.contract_start) : '--'}</span></div>
-                                <div className="flex justify-between"><span className="text-slate-500">Contract End</span><span className={cn('font-medium', getContractEndColor(scheme.contract_end))}>{scheme.contract_end ? formatDate(scheme.contract_end) : 'Not set'}</span></div>
+                                <div className="flex justify-between items-center gap-2">
+                                  <span className="text-slate-500">Address</span>
+                                  <InlineFieldEdit schemeId={scheme.id} field="address" value={scheme.address}
+                                    lockedBy={scheme.locked_fields?.address} onSaved={() => fetchSchemes()} />
+                                </div>
+                                <div className="flex justify-between items-center gap-2">
+                                  <span className="text-slate-500">Postcode</span>
+                                  <InlineFieldEdit schemeId={scheme.id} field="postcode" value={scheme.postcode}
+                                    lockedBy={scheme.locked_fields?.postcode} onSaved={() => fetchSchemes()} />
+                                </div>
+                                <div className="flex justify-between items-center gap-2">
+                                  <span className="text-slate-500">Num Units</span>
+                                  <InlineFieldEdit schemeId={scheme.id} field="num_units" value={scheme.units} type="number"
+                                    lockedBy={scheme.locked_fields?.num_units} onSaved={() => fetchSchemes()} />
+                                </div>
+                                <div className="flex justify-between items-center gap-2">
+                                  <span className="text-slate-500">Operator</span>
+                                  <InlineFieldEdit schemeId={scheme.id} field="operator" value={scheme.operator} type="company"
+                                    lockedBy={scheme.locked_fields?.operator_company_id} onSaved={() => fetchSchemes()} />
+                                </div>
+                                <div className="flex justify-between items-center gap-2">
+                                  <span className="text-slate-500">Owner</span>
+                                  <InlineFieldEdit schemeId={scheme.id} field="owner" value={scheme.owner} type="company"
+                                    lockedBy={scheme.locked_fields?.owner_company_id} onSaved={() => fetchSchemes()} />
+                                </div>
+                                <div className="flex justify-between items-center gap-2">
+                                  <span className="text-slate-500">Asset Manager</span>
+                                  <InlineFieldEdit schemeId={scheme.id} field="asset_manager" value={scheme.asset_manager} type="company"
+                                    lockedBy={scheme.locked_fields?.asset_manager_company_id} onSaved={() => fetchSchemes()} />
+                                </div>
+                                <div className="flex justify-between items-center gap-2">
+                                  <span className="text-slate-500">Landlord</span>
+                                  <InlineFieldEdit schemeId={scheme.id} field="landlord" value={scheme.landlord} type="company"
+                                    lockedBy={scheme.locked_fields?.landlord_company_id} onSaved={() => fetchSchemes()} />
+                                </div>
+                                <div className="flex justify-between items-center gap-2">
+                                  <span className="text-slate-500">Contract Start</span>
+                                  <InlineFieldEdit schemeId={scheme.id} field="contract_start_date" value={scheme.contract_start} type="date"
+                                    lockedBy={scheme.locked_fields?.contract_start_date} onSaved={() => fetchSchemes()}
+                                    displayFormatter={(v) => v ? formatDate(String(v)) : <span className="text-slate-600">--</span>} />
+                                </div>
+                                <div className="flex justify-between items-center gap-2">
+                                  <span className="text-slate-500">Contract End</span>
+                                  <InlineFieldEdit schemeId={scheme.id} field="contract_end_date" value={scheme.contract_end} type="date"
+                                    lockedBy={scheme.locked_fields?.contract_end_date} onSaved={() => fetchSchemes()}
+                                    displayFormatter={(v) => v ? <span className={cn('font-medium', getContractEndColor(String(v)))}>{formatDate(String(v))}</span> : <span className="text-slate-600">Not set</span>} />
+                                </div>
                               </div>
                             </div>
 
-                            {/* BD Score Breakdown - horizontal bars */}
-                            <div className="space-y-4">
-                              <h4 className="text-sm font-semibold text-white flex items-center gap-2">
-                                <span className="w-1 h-4 bg-violet-500 rounded-full" />
-                                BD Score Breakdown
-                              </h4>
-                              <div className="space-y-2.5">
-                                {Object.entries(scheme.score_breakdown).map(([key, val]) => (
-                                  <div key={key}>
-                                    <div className="flex items-center justify-between mb-1">
-                                      <span className="text-[11px] text-slate-400 capitalize">{key.replace(/_/g, ' ')}</span>
-                                      <span className="text-[11px] font-semibold text-slate-300">{val}</span>
-                                    </div>
-                                    <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                                      <div
-                                        className={cn(
-                                          'h-full rounded-full transition-all duration-700',
-                                          val > 80 ? 'bg-gradient-to-r from-red-600 to-red-400' :
-                                          val > 50 ? 'bg-gradient-to-r from-amber-600 to-amber-400' :
-                                          'bg-gradient-to-r from-emerald-600 to-emerald-400'
-                                        )}
-                                        style={{ width: `${val}%` }}
-                                      />
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
+                            {/* BD Score Breakdown */}
+                            <BDScoreBreakdown scheme={scheme} />
 
                             {/* Competitor Analysis */}
-                            <div className="space-y-4">
-                              <h4 className="text-sm font-semibold text-white flex items-center gap-2">
-                                <span className="w-1 h-4 bg-amber-500 rounded-full" />
-                                Competitor Analysis
-                              </h4>
-                              <div className="space-y-3">
-                                {(competitorMock[scheme.id] || defaultCompetitors).map((comp, idx) => (
-                                  <div key={idx} className="bg-slate-700/30 rounded-lg p-3 space-y-1.5">
-                                    <p className="text-xs font-semibold text-white">{comp.name}</p>
-                                    <div className="flex items-start gap-1.5">
-                                      <span className="text-[10px] text-emerald-400 font-medium flex-shrink-0">+</span>
-                                      <p className="text-[11px] text-slate-400">{comp.strength}</p>
-                                    </div>
-                                    <div className="flex items-start gap-1.5">
-                                      <span className="text-[10px] text-red-400 font-medium flex-shrink-0">-</span>
-                                      <p className="text-[11px] text-slate-400">{comp.weakness}</p>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
+                            <CompetitorPanel scheme={scheme} onFilterBy={(c) => handleFilterByCompetitor(scheme, c)} />
                           </div>
+
+                          {/* Rent Tiers */}
+                          <RentPanel schemeId={scheme.id} />
 
                           {/* Contract History */}
                           <ContractTimeline schemeId={scheme.id} />
 
-                          {/* Recommended Approach */}
+                          {/* AI Enrichment + Actions */}
                           <div className="mt-6 flex items-start gap-6">
                             <div className="flex-1">
-                              <h4 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                                <SparklesIcon className="w-4 h-4 text-amber-400" />
-                                AI Recommended Approach
-                              </h4>
-                              <div className="bg-gradient-to-br from-amber-500/[0.06] to-orange-500/[0.06] border border-amber-500/20 rounded-lg p-4">
-                                <p className="text-sm text-slate-300 leading-relaxed">
-                                  {approachMock[scheme.id] || defaultApproach}
-                                </p>
-                              </div>
+                              <AIEnrichPanel
+                                schemeId={scheme.id}
+                                schemeName={scheme.name}
+                                onApplied={() => fetchSchemes()}
+                              />
                             </div>
-                            <div className="flex-shrink-0 pt-8">
+                            <div className="flex-shrink-0 pt-2">
                               {scheme.pipeline_opportunity_id ? (
                                 <a
                                   href="/pipeline"
@@ -909,6 +1461,73 @@ export default function SchemesPage() {
           </table>
         </div>
       </Card>
+
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-slate-500">
+            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalSchemes)} of {totalSchemes.toLocaleString()} schemes
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage(0)}
+              disabled={page === 0}
+              className="px-3 py-1.5 text-xs font-medium text-slate-400 bg-slate-800 border border-slate-700 rounded-lg hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              First
+            </button>
+            <button
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="px-3 py-1.5 text-xs font-medium text-slate-400 bg-slate-800 border border-slate-700 rounded-lg hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              ← Prev
+            </button>
+            <div className="flex items-center gap-1">
+              {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                let pageNum: number;
+                if (totalPages <= 7) {
+                  pageNum = i;
+                } else if (page < 4) {
+                  pageNum = i;
+                } else if (page > totalPages - 5) {
+                  pageNum = totalPages - 7 + i;
+                } else {
+                  pageNum = page - 3 + i;
+                }
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setPage(pageNum)}
+                    className={cn(
+                      'w-8 h-8 text-xs font-medium rounded-lg transition-colors',
+                      pageNum === page
+                        ? 'bg-blue-600 text-white'
+                        : 'text-slate-400 bg-slate-800 border border-slate-700 hover:bg-slate-700'
+                    )}
+                  >
+                    {pageNum + 1}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={page >= totalPages - 1}
+              className="px-3 py-1.5 text-xs font-medium text-slate-400 bg-slate-800 border border-slate-700 rounded-lg hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Next →
+            </button>
+            <button
+              onClick={() => setPage(totalPages - 1)}
+              disabled={page >= totalPages - 1}
+              className="px-3 py-1.5 text-xs font-medium text-slate-400 bg-slate-800 border border-slate-700 rounded-lg hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Last
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Add to Pipeline Modal */}
       <AddToPipelineModal

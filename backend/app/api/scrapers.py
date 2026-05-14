@@ -578,6 +578,85 @@ def trigger_enrichment(current_user: User = Depends(require_role("admin"))):
     return {"message": "Enrichment task queued", "task_id": str(result.id)}
 
 
+# ---------------------------------------------------------------------------
+# PBSA operator scrape
+# ---------------------------------------------------------------------------
+
+class PBSAScrapeRequest(BaseModel):
+    operator_keys: Optional[list[str]] = None
+    max_schemes_per_operator: Optional[int] = None
+    rate_limit_seconds: float = 1.5
+    run_ccod_enrichment: bool = True
+
+
+@router.post("/trigger-pbsa")
+async def trigger_pbsa_scrape(
+    data: PBSAScrapeRequest = PBSAScrapeRequest(),
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    """
+    Scrape public portfolio pages of UK PBSA operators and persist schemes.
+
+    Synchronous (awaits the scrape). Use max_schemes_per_operator to cap for testing.
+    If run_ccod_enrichment is true (default), also runs CCOD postcode match
+    to attach owner companies after scraping.
+    """
+    from app.scrapers.pbsa_scraper import (
+        PBSAScraper,
+        OPERATOR_CONFIGS,
+        save_pbsa_schemes,
+    )
+
+    # Validate operator keys if provided
+    if data.operator_keys:
+        invalid = [k for k in data.operator_keys if k not in OPERATOR_CONFIGS]
+        if invalid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown operator keys: {invalid}. Valid: {list(OPERATOR_CONFIGS.keys())}",
+            )
+
+    try:
+        async with PBSAScraper(rate_limit_seconds=data.rate_limit_seconds) as scraper:
+            scraped = await scraper.scrape_all(
+                data.operator_keys,
+                data.max_schemes_per_operator,
+            )
+        counts_per_operator = {k: len(v) for k, v in scraped.items()}
+        stats = save_pbsa_schemes(scraped, db)
+
+        ccod_result = None
+        if data.run_ccod_enrichment and stats.get("new", 0) > 0:
+            try:
+                from app.tasks.scheme_enrichment_pipeline import _enrich_from_ccod
+                ccod_result = _enrich_from_ccod(db)
+            except Exception as exc:
+                ccod_result = {"error": str(exc)}
+
+        return {
+            "status": "success",
+            "operators_scraped": counts_per_operator,
+            "total_scraped": sum(counts_per_operator.values()),
+            **stats,
+            "ccod_enrichment": ccod_result,
+        }
+    except Exception as exc:
+        return {"status": "failed", "error": str(exc)}
+
+
+@router.get("/pbsa-operators")
+def list_pbsa_operators(current_user: User = Depends(require_role("admin"))):
+    """List available PBSA operator keys and names for the scraper."""
+    from app.scrapers.pbsa_scraper import OPERATOR_CONFIGS
+    return {
+        "operators": [
+            {"key": k, "name": c.operator_name, "base_url": c.base_url}
+            for k, c in OPERATOR_CONFIGS.items()
+        ]
+    }
+
+
 @router.post("/trigger-scoring")
 def trigger_scoring(current_user: User = Depends(require_role("admin"))):
     """Trigger BD scoring recalculation and pipeline creation."""

@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, and_
+from sqlalchemy import func, and_, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -149,11 +149,13 @@ class SchemeChangeLogResponse(BaseModel):
 def list_schemes(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=500),
+    search: Optional[str] = None,
     scheme_type: Optional[str] = None,
     council_id: Optional[int] = None,
     operator_company_id: Optional[int] = None,
     postcode: Optional[str] = None,
     status: Optional[str] = None,
+    source: Optional[str] = None,
     landlord_company_id: Optional[int] = None,
     asset_manager_company_id: Optional[int] = None,
     contract_expiry_before: Optional[datetime.date] = None,
@@ -175,8 +177,23 @@ def list_schemes(
         joinedload(ExistingScheme.council),
     )
 
+    if search is not None:
+        like_term = f"%{search}%"
+        search_conditions = [
+            ExistingScheme.name.ilike(like_term),
+            ExistingScheme.address.ilike(like_term),
+            ExistingScheme.postcode.ilike(like_term),
+            ExistingScheme.operator_company.has(Company.name.ilike(like_term)),
+            ExistingScheme.owner_company.has(Company.name.ilike(like_term)),
+            ExistingScheme.council.has(Council.name.ilike(like_term)),
+        ]
+        if search.strip().isdigit():
+            search_conditions.append(ExistingScheme.id == int(search.strip()))
+        query = query.filter(or_(*search_conditions))
     if scheme_type is not None:
         query = query.filter(ExistingScheme.scheme_type == scheme_type)
+    if source is not None:
+        query = query.filter(ExistingScheme.source == source)
     if council_id is not None:
         query = query.filter(ExistingScheme.council_id == council_id)
     if operator_company_id is not None:

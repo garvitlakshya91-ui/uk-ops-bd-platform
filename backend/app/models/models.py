@@ -15,6 +15,7 @@ from sqlalchemy import (
     JSON,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -201,6 +202,7 @@ class PlanningApplication(Base):
     )
     application_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     status: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    decision: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     scheme_type: Mapped[str] = mapped_column(
         String(50),
         default="Unknown",
@@ -208,11 +210,29 @@ class PlanningApplication(Base):
         comment="BTR, PBSA, Co-living, Senior, Affordable, Mixed, Unknown",
     )
     num_units: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_units: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     submission_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    submitted_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    validated_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     decision_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    consultation_end_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    committee_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    affordable_units: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    commercial_sqm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    storeys: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    epc_rating: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
     appeal_status: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    portal_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     documents_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    ward: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    is_btr: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
+    is_pbsa: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
+    is_affordable: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
+    bd_relevance_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     raw_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    raw_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -305,6 +325,10 @@ class ExistingScheme(Base):
     hmlr_tenure: Mapped[Optional[str]] = mapped_column(
         String(20), nullable=True,
         comment="Freehold or Leasehold from HMLR CCOD",
+    )
+    locked_fields: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default="{}",
+        comment="Per-field source precedence lock: {field_name: source_label}",
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -452,6 +476,56 @@ class SchemeChangeLog(Base):
         Index("ix_scheme_change_logs_scheme_id", "scheme_id"),
         Index("ix_scheme_change_logs_changed_at", "changed_at"),
         Index("ix_scheme_change_logs_field_name", "field_name"),
+    )
+
+
+class SchemeRent(Base):
+    """Rent tier for a scheme. A scheme has 1-N rent rows, one per
+    room type / academic year. BTR schemes typically have one tier per
+    unit type; PBSA schemes have multiple (studio, classic studio, etc.)."""
+
+    __tablename__ = "scheme_rents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scheme_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="CASCADE"), nullable=False
+    )
+    room_type: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True,
+        comment="e.g. Studio, Classic Studio, Ensuite, 1-bed apartment, 2-bed apartment",
+    )
+    rent_per_week: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rent_per_month: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), default="GBP", nullable=False)
+    academic_year: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True,
+        comment="For PBSA: 2025/26, 2026/27; for BTR usually null",
+    )
+    contract_length_weeks: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True,
+        comment="Tenancy length in weeks (PBSA typically 44-51)",
+    )
+    source: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True,
+        comment="operator_scraper, ai_enrichment, manual, rightmove, etc.",
+    )
+    source_reference: Mapped[Optional[str]] = mapped_column(
+        String(500), nullable=True, comment="Source URL or ref",
+    )
+    scraped_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    scheme: Mapped["ExistingScheme"] = relationship(
+        "ExistingScheme", backref="rents"
+    )
+
+    __table_args__ = (
+        Index("ix_scheme_rents_scheme_id", "scheme_id"),
+        Index("ix_scheme_rents_scheme_room", "scheme_id", "room_type"),
     )
 
 

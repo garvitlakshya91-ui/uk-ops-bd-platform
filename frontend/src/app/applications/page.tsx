@@ -210,7 +210,7 @@ export default function ApplicationsPage() {
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
         <SearchInput
-          placeholder="Search reference, address, applicant..."
+          placeholder="Search by reference, address, postcode, applicant, council..."
           onChange={setSearch}
           className="w-80"
         />

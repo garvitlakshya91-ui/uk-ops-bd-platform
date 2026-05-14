@@ -150,8 +150,10 @@ def list_applications(
             or_(
                 PlanningApplication.reference.ilike(pattern),
                 PlanningApplication.address.ilike(pattern),
+                PlanningApplication.postcode.ilike(pattern),
                 PlanningApplication.description.ilike(pattern),
                 PlanningApplication.applicant_name.ilike(pattern),
+                PlanningApplication.council.has(Council.name.ilike(pattern)),
             )
         )
 
