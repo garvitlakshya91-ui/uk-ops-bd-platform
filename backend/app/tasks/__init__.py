@@ -35,22 +35,31 @@ celery_app.conf.update(
 
 celery_app.conf.beat_schedule = {
     # Scraping schedules
-    "scrape-all-councils-daily": {
-        "task": "app.tasks.scraping_tasks.scrape_all_councils",
-        "schedule": crontab(hour=2, minute=0),
-        "options": {"queue": "scraping"},
-    },
+    # NOTE: scrape-all-councils-daily temporarily PAUSED on 2026-05-30 while
+    # the standalone arrears backfill runs. Each scrape_council spawns CH
+    # lookups via enrich_company which compete with arrears for the CH
+    # rate limit (600 req / 5min). Re-enable after arrears coverage target.
+    # "scrape-all-councils-daily": {
+    #     "task": "app.tasks.scraping_tasks.scrape_all_councils",
+    #     "schedule": crontab(hour=2, minute=0),
+    #     "options": {"queue": "scraping"},
+    # },
     "scrape-planning-data-api-every-6h": {
         "task": "app.tasks.scraping_tasks.scrape_planning_data_api",
         "schedule": crontab(hour="*/6", minute=15),
         "options": {"queue": "scraping"},
     },
     # Enrichment schedules
-    "enrich-new-applications-hourly": {
-        "task": "app.tasks.enrichment_tasks.enrich_new_applications",
-        "schedule": crontab(minute=30),
-        "options": {"queue": "enrichment"},
-    },
+    # NOTE: enrich-new-applications-hourly temporarily PAUSED on 2026-05-30
+    # while the standalone arrears backfill is running. It was burning all
+    # 12 worker slots paging through Companies House lookups, starving the
+    # arrears queue. Re-enable by uncommenting after arrears coverage hits
+    # the target.
+    # "enrich-new-applications-hourly": {
+    #     "task": "app.tasks.enrichment_tasks.enrich_new_applications",
+    #     "schedule": crontab(minute=30),
+    #     "options": {"queue": "enrichment"},
+    # },
     "reverify-contacts-weekly": {
         "task": "app.tasks.enrichment_tasks.reverify_contacts",
         "schedule": crontab(hour=6, minute=0, day_of_week="monday"),
@@ -92,6 +101,16 @@ celery_app.conf.beat_schedule = {
     "backfill-scheme-postcodes-daily": {
         "task": "app.tasks.enrichment_tasks.backfill_scheme_postcodes",
         "schedule": crontab(hour=3, minute=30),
+        "options": {"queue": "enrichment"},
+    },
+    # Council-id backfill: runs hourly (light when there's nothing to do),
+    # right after the scrape windows close. Self-tunes — first pass uses the
+    # cheap outcode reuse; only postcodes the local DB can't resolve hit
+    # Postcodes.io. New councils (Welsh / Scottish / NI / new UK LAs) get
+    # created automatically.
+    "backfill-scheme-council-ids-hourly": {
+        "task": "app.tasks.enrichment_tasks.backfill_scheme_council_ids",
+        "schedule": crontab(minute=45),
         "options": {"queue": "enrichment"},
     },
     "enrich-schemes-epc-weekly": {

@@ -26,6 +26,7 @@ import InlineFieldEdit from '@/components/InlineFieldEdit';
 import FilterPanel, { SchemeFilters, DEFAULT_FILTERS, countActiveFilters } from '@/components/schemes/FilterPanel';
 import ActiveFilterPills from '@/components/schemes/ActiveFilterPills';
 import { getSchemesFilterOptions, SchemesFilterOptions } from '@/lib/api';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AdjustmentsHorizontalIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
@@ -41,6 +42,7 @@ interface SchemeRow {
   performance: number | null;
   satisfaction: number | null;
   bd_score: number | null;
+  arrears_risk_score: number | null;  // 0-100, higher = more operator distress
   priority: 'high' | 'medium' | 'low';
   scheme_type: string;
   address: string;
@@ -404,6 +406,132 @@ function CompetitorPanel({
 }
 
 
+// Operator Health Panel — surfaces the arrears risk score and its meaning
+// for the scheme's operator. Pulls the score (0-100) from the scheme row
+// and decodes the dominant Companies House signal cluster.
+function OperatorHealthPanel({ scheme }: { scheme: SchemeRow }) {
+  const score = scheme.arrears_risk_score;
+  const lastChecked = (scheme as any).arrears_checked_at as string | null | undefined;
+
+  if (score === null || score === undefined) {
+    return (
+      <div className="mt-6 rounded-lg border border-slate-700/40 bg-slate-800/30 p-4">
+        <div className="flex items-center gap-2 mb-1">
+          <ExclamationTriangleIcon className="w-4 h-4 text-slate-500" />
+          <h4 className="text-sm font-semibold text-slate-300">Operator Health</h4>
+        </div>
+        <p className="text-xs text-slate-500">
+          No arrears data yet. Score is computed from the operator&apos;s Companies House
+          profile (status, overdue filings, recent charges). Coverage builds as company
+          lookups complete.
+        </p>
+      </div>
+    );
+  }
+
+  const bucket = score >= 80 ? 'critical' : score >= 60 ? 'distressed' : score >= 35 ? 'caution' : 'healthy';
+  const bucketMeta: Record<string, { label: string; cls: string; barCls: string; signal: string }> = {
+    critical: {
+      label: 'Critical',
+      cls: 'bg-red-500/20 text-red-300 border-red-500/40',
+      barCls: 'bg-red-500',
+      signal: 'Multiple severe signals — likely dissolved, in administration, or with multiple overdue filings',
+    },
+    distressed: {
+      label: 'Distressed',
+      cls: 'bg-orange-500/20 text-orange-300 border-orange-500/40',
+      barCls: 'bg-orange-500',
+      signal: 'Multiple concurrent signals — overdue filings + recent debenture or serial refinancing',
+    },
+    caution: {
+      label: 'Caution',
+      cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+      barCls: 'bg-amber-500',
+      signal: 'One mild signal — typically a recent charge or stalled filing',
+    },
+    healthy: {
+      label: 'Healthy',
+      cls: 'bg-slate-700/50 text-slate-300 border-slate-600',
+      barCls: 'bg-emerald-500/60',
+      signal: 'No distress signals on operator’s Companies House profile',
+    },
+  };
+  const meta = bucketMeta[bucket];
+
+  return (
+    <div className="mt-6 rounded-lg border border-slate-700/40 bg-slate-800/30 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700/40">
+        <div className="flex items-center gap-2">
+          <ExclamationTriangleIcon className="w-4 h-4 text-amber-400" />
+          <h4 className="text-sm font-semibold text-white">Operator Health</h4>
+          <span className="text-xs text-slate-500">·</span>
+          <span className="text-xs text-slate-400">{scheme.operator || 'Unknown operator'}</span>
+        </div>
+        {lastChecked && (
+          <span className="text-[11px] text-slate-500">
+            Last check: {new Date(lastChecked).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+          </span>
+        )}
+      </div>
+
+      {/* Body */}
+      <div className="p-5 grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* Score chip */}
+        <div className="flex flex-col items-center justify-center py-3">
+          <div className={cn(
+            'w-24 h-24 rounded-full flex items-center justify-center border-4',
+            bucket === 'critical' && 'border-red-500/60',
+            bucket === 'distressed' && 'border-orange-500/60',
+            bucket === 'caution' && 'border-amber-500/60',
+            bucket === 'healthy' && 'border-emerald-500/40',
+          )}>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-white tabular-nums">{score.toFixed(0)}</div>
+              <div className="text-[10px] text-slate-500 uppercase tracking-wide">/ 100</div>
+            </div>
+          </div>
+          <span className={cn('mt-3 inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border', meta.cls)}>
+            {meta.label}
+          </span>
+        </div>
+
+        {/* Signal interpretation */}
+        <div className="lg:col-span-2">
+          <div className="text-xs text-slate-500 uppercase tracking-wide mb-2">What this means</div>
+          <p className="text-sm text-slate-300 mb-4 leading-relaxed">{meta.signal}</p>
+
+          <div className="text-xs text-slate-500 uppercase tracking-wide mb-2">How the score is built</div>
+          <div className="space-y-1.5">
+            {[
+              { label: 'Status: dissolved / liquidation / admin', points: '+40', alwaysVisible: score >= 70 },
+              { label: 'Accounts overdue', points: '+25', alwaysVisible: score >= 55 },
+              { label: 'Confirmation statement overdue', points: '+15', alwaysVisible: score >= 45 },
+              { label: 'Recent debenture (last 6 months)', points: '+15', alwaysVisible: score >= 45 },
+              { label: 'Serial refinancing pattern', points: '+15', alwaysVisible: score >= 60 },
+              { label: 'Baseline (no signals)', points: '30', alwaysVisible: true },
+            ].map((row) => (
+              <div key={row.label} className={cn(
+                'flex items-center justify-between text-xs px-2 py-1 rounded',
+                row.alwaysVisible ? 'bg-slate-700/30' : 'opacity-50',
+              )}>
+                <span className={cn('text-slate-300', row.alwaysVisible && score >= 60 && 'text-amber-300')}>
+                  {row.alwaysVisible && score >= 60 && (score === 30 ? '' : '✓ ')}{row.label}
+                </span>
+                <span className="font-mono text-slate-500">{row.points}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-[11px] text-slate-500 italic">
+            Score is a heuristic from Companies House public data. Higher = more operator distress = stronger BD opportunity.
+            <Link href="/arrears" className="ml-1 text-amber-400 hover:text-amber-300">View all distressed schemes →</Link>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BDScoreBreakdown({ scheme }: { scheme: SchemeRow }) {
   const breakdown = scheme.score_breakdown;
   return (
@@ -689,6 +817,7 @@ function paramsToFilters(sp: URLSearchParams): SchemeFilters {
     max_rent: sp.get('max_rent') || '',
     operator_ids: sp.getAll('operator_id').map(s => Number(s)).filter(n => !Number.isNaN(n)),
     contract_end_within_days: sp.get('contract_end_within_days') || '',
+    min_arrears: sp.get('min_arrears') || '',
   };
 }
 
@@ -707,6 +836,7 @@ function filtersToURLSearchParams(f: SchemeFilters): URLSearchParams {
   if (f.min_rent) p.set('min_rent', f.min_rent);
   if (f.max_rent) p.set('max_rent', f.max_rent);
   if (f.contract_end_within_days) p.set('contract_end_within_days', f.contract_end_within_days);
+  if (f.min_arrears) p.set('min_arrears', f.min_arrears);
   for (const id of f.operator_ids) p.append('operator_id', String(id));
   return p;
 }
@@ -725,15 +855,83 @@ export default function SchemesPage() {
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState('bd_score');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Deep-link support: ?expanded=<scheme_id> opens that scheme's expanded row.
+  // Used by inbound links from /arrears, dashboard, etc. — since there is no
+  // dedicated /schemes/[id] route, this is how external surfaces reference a
+  // specific scheme.
+  const [expandedId, setExpandedId] = useState<string | null>(
+    () => searchParams?.get('expanded') || null,
+  );
   const [pipelineModalScheme, setPipelineModalScheme] = useState<SchemeRow | null>(null);
   const [page, setPage] = useState(0);
   const [totalSchemes, setTotalSchemes] = useState(0);
   const PAGE_SIZE = 100;
 
-  // Initialise filters from URL
+  // Scroll to the deep-linked scheme once it renders, and if it isn't in the
+  // current page's results, fetch it directly via the scheme_ids filter and
+  // prepend to the list. Without this fetch, deep-link clicks from /arrears
+  // do nothing because the target scheme is often sorted past the page-1 cut.
+  useEffect(() => {
+    const expanded = searchParams?.get('expanded');
+    if (!expanded || schemes.length === 0) return;
+    const present = schemes.some(s => s.id === expanded);
+    if (present) {
+      const el = document.getElementById(`scheme-row-${expanded}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    // Not in current page — fetch by id and prepend
+    api.get('/v2/schemes', { params: { scheme_ids: expanded, limit: 1 } })
+      .then(res => {
+        const item = (res.data?.items || [])[0];
+        if (!item) return;
+        const newRow: SchemeRow = {
+          id: item.id,
+          name: item.name || '',
+          operator: item.operator || '',
+          council: item.council || '',
+          region: item.region || null,
+          units: item.units ?? null,
+          contract_end: item.contract_end || '',
+          performance: item.performance ?? null,
+          satisfaction: item.satisfaction ?? null,
+          bd_score: item.bd_score ?? null,
+          arrears_risk_score: item.arrears_risk_score ?? null,
+          priority: item.priority || 'low',
+          scheme_type: item.scheme_type || 'Unknown',
+          address: item.address || '',
+          postcode: item.postcode || '',
+          owner: item.owner || '',
+          asset_manager: item.asset_manager || '',
+          landlord: item.landlord || '',
+          contract_start: item.contract_start || '',
+          occupancy_rate: item.occupancy_rate ?? null,
+          revenue_per_unit: item.revenue_per_unit ?? null,
+          score_breakdown: item.score_breakdown || {
+            contract_proximity: 0, performance_gap: 0,
+            market_opportunity: 0, relationship_strength: 0, scheme_size: 0,
+          },
+          locked_fields: item.locked_fields || {},
+          operator_company_id: item.operator_company_id ?? null,
+          pipeline_opportunity_id: item.pipeline_opportunity_id ?? null,
+          min_rent_per_week: item.min_rent_per_week ?? null,
+          rent_tier_count: item.rent_tier_count ?? 0,
+        };
+        setSchemes(prev => [newRow, ...prev.filter(s => s.id !== newRow.id)]);
+        // Scroll on next paint
+        setTimeout(() => {
+          const el = document.getElementById(`scheme-row-${expanded}`);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 50);
+      })
+      .catch(() => {/* silent — leave list as-is */});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schemes.length]);
+
+  // Initialise filters from URL. Next.js useSearchParams returns
+  // ReadonlyURLSearchParams; convert to URLSearchParams via toString().
   const [filters, setFiltersState] = useState<SchemeFilters>(() =>
-    paramsToFilters(searchParams ?? new URLSearchParams())
+    paramsToFilters(new URLSearchParams(searchParams?.toString() ?? ''))
   );
   const [panelOpen, setPanelOpen] = useState(false);
   const [filterOptions, setFilterOptions] = useState<SchemesFilterOptions | null>(null);
@@ -864,6 +1062,7 @@ export default function SchemesPage() {
     if (filters.min_rent) params.min_rent_per_week = filters.min_rent;
     if (filters.max_rent) params.max_rent_per_week = filters.max_rent;
     if (filters.contract_end_within_days) params.contract_end_within_days = filters.contract_end_within_days;
+    if (filters.min_arrears) params.min_arrears = filters.min_arrears;
     if (filters.operator_ids.length > 0) {
       params.operator_company_id = filters.operator_ids.map(String);
     }
@@ -887,6 +1086,7 @@ export default function SchemesPage() {
           performance: s.performance ?? null,
           satisfaction: s.satisfaction ?? null,
           bd_score: s.bd_score ?? null,
+          arrears_risk_score: s.arrears_risk_score ?? null,
           priority: s.priority || 'low',
           scheme_type: s.scheme_type || 'Unknown',
           address: s.address || '',
@@ -925,15 +1125,19 @@ export default function SchemesPage() {
       setSortDir(prev => prev === 'asc' ? 'desc' : 'asc');
     } else {
       setSortBy(field);
-      setSortDir(field === 'units' || field === 'bd_score' ? 'desc' : 'asc');
+      setSortDir(field === 'units' || field === 'bd_score' || field === 'arrears_risk_score' ? 'desc' : 'asc');
     }
   };
 
   const sortedSchemes = [...schemes]
     .sort((a, b) => {
-      // Client-side sort for bd_score, performance (not server-sorted)
+      // Client-side sort for bd_score, performance, arrears (not server-sorted)
       if (sortBy === 'bd_score') {
         const diff = (b.bd_score ?? -1) - (a.bd_score ?? -1);
+        return sortDir === 'asc' ? -diff : diff;
+      }
+      if (sortBy === 'arrears_risk_score') {
+        const diff = (b.arrears_risk_score ?? -1) - (a.arrears_risk_score ?? -1);
         return sortDir === 'asc' ? -diff : diff;
       }
       if (sortBy === 'performance') {
@@ -1147,6 +1351,19 @@ export default function SchemesPage() {
             £ Has rent data
           </button>
           <button
+            onClick={() => setFilters({ min_arrears: filters.min_arrears === '60' ? '' : '60' })}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
+              filters.min_arrears
+                ? 'bg-orange-500/15 border-orange-500/40 text-orange-300 shadow-[0_0_0_1px_rgba(249,115,22,0.2)]'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+            )}
+            title="Schemes whose operator shows Companies House distress signals (arrears_risk_score ≥ 60)"
+          >
+            <span className={cn('w-2 h-2 rounded-full', filters.min_arrears ? 'bg-orange-400' : 'bg-slate-500')} />
+            Distressed only
+          </button>
+          <button
             onClick={() => setPanelOpen(v => !v)}
             className={cn(
               'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
@@ -1224,6 +1441,13 @@ export default function SchemesPage() {
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('bd_score')}>
                   BD Score {sortBy === 'bd_score' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
                 </th>
+                <th
+                  className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none"
+                  onClick={() => handleSort('arrears_risk_score')}
+                  title="Operator financial distress score (Companies House). Higher = more distress = stronger BD opportunity."
+                >
+                  Arrears {sortBy === 'arrears_risk_score' && <span className="text-orange-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                </th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase">Trend</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase">Priority</th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase">Actions</th>
@@ -1237,6 +1461,7 @@ export default function SchemesPage() {
                 return (
                   <React.Fragment key={scheme.id}>
                     <tr
+                      id={`scheme-row-${scheme.id}`}
                       className={cn(
                         'hover:bg-slate-700/50 transition-colors cursor-pointer',
                         (scheme.bd_score ?? 0) >= 85 && 'bg-gradient-to-r from-red-500/[0.04] via-transparent to-transparent'
@@ -1295,6 +1520,33 @@ export default function SchemesPage() {
                         <BdScoreRadial score={scheme.bd_score} />
                       </td>
                       <td className="px-4 py-3 text-center">
+                        {scheme.arrears_risk_score !== null ? (
+                          (() => {
+                            const s = scheme.arrears_risk_score!;
+                            const cls = s >= 80
+                              ? 'bg-red-500/20 text-red-300 border-red-500/40'
+                              : s >= 60
+                                ? 'bg-orange-500/20 text-orange-300 border-orange-500/40'
+                                : s >= 35
+                                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                  : 'bg-slate-700/50 text-slate-400 border-slate-600';
+                            return (
+                              <span
+                                className={cn(
+                                  'inline-flex items-center justify-center min-w-[2.25rem] px-1.5 py-0.5 rounded text-[11px] font-semibold border tabular-nums',
+                                  cls,
+                                )}
+                                title={`Arrears risk ${s.toFixed(0)} — derived from operator's Companies House signals`}
+                              >
+                                {s.toFixed(0)}
+                              </span>
+                            );
+                          })()
+                        ) : (
+                          <span className="text-[10px] text-slate-600">--</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
                         {trend > 0 ? (
                           <div className="flex items-center justify-center gap-0.5">
                             <ArrowTrendingUpIcon className="w-4 h-4 text-red-400" />
@@ -1348,7 +1600,7 @@ export default function SchemesPage() {
                     {/* Expanded row */}
                     {expandedId === scheme.id && (
                       <tr>
-                        <td colSpan={13} className="px-8 py-6 bg-slate-800/60">
+                        <td colSpan={14} className="px-8 py-6 bg-slate-800/60">
                           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                             {/* Scheme Details */}
                             <div className="space-y-4">
@@ -1413,6 +1665,9 @@ export default function SchemesPage() {
                             {/* Competitor Analysis */}
                             <CompetitorPanel scheme={scheme} onFilterBy={(c) => handleFilterByCompetitor(scheme, c)} />
                           </div>
+
+                          {/* Operator Health (arrears / Companies House distress signals) */}
+                          <OperatorHealthPanel scheme={scheme} />
 
                           {/* Rent Tiers */}
                           <RentPanel schemeId={scheme.id} />

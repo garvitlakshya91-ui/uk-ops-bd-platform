@@ -157,6 +157,19 @@ def enrich_new_applications() -> dict[str, Any]:
         from app.matching.company_matcher import CompanyMatcher
         from app.enrichment.companies_house import CompaniesHouseEnricher
 
+        # Skip names that are clearly individual applicants — they'll never
+        # match Companies House. Each pointless CH lookup costs ~1-3s and
+        # historically caused this task to hit its 900s time limit.
+        # The regex matches names starting with a title (Mr/Mrs/Ms/Miss/Dr/
+        # Mx/Sir/Dame/Rev/Prof/Lord/Lady) followed by whitespace, plus the
+        # common "C/O <person>" agent-of pattern.
+        _individual_re = (
+            r"^\s*("
+            r"(mr|mrs|ms|miss|mx|dr|sir|dame|rev|prof|lord|lady)\.?\s+"
+            r"|c\s*/\s*o\s+"
+            r")"
+        )
+
         # Find applications with applicant names but no linked company.
         unlinked = (
             db.query(PlanningApplication)
@@ -164,6 +177,8 @@ def enrich_new_applications() -> dict[str, Any]:
                 PlanningApplication.applicant_name.isnot(None),
                 PlanningApplication.applicant_name != "",
                 PlanningApplication.applicant_company_id.is_(None),
+                # Postgres ~* is case-insensitive regex; NOT ~* skips matches
+                ~PlanningApplication.applicant_name.op("~*")(_individual_re),
             )
             .order_by(PlanningApplication.created_at.desc())
             .limit(100)  # Process in batches.
@@ -209,13 +224,14 @@ def enrich_new_applications() -> dict[str, Any]:
 
         _run_async(ch_enricher.close())
 
-        # Also handle agent names.
+        # Also handle agent names (same individual-name skip).
         unlinked_agents = (
             db.query(PlanningApplication)
             .filter(
                 PlanningApplication.agent_name.isnot(None),
                 PlanningApplication.agent_name != "",
                 PlanningApplication.agent_company_id.is_(None),
+                ~PlanningApplication.agent_name.op("~*")(_individual_re),
             )
             .order_by(PlanningApplication.created_at.desc())
             .limit(50)
@@ -1936,8 +1952,12 @@ def backfill_contract_dates_from_ch_charges(batch_size: int = 200) -> dict[str, 
 
     For each scheme where ``contract_end_date`` is NULL but the owner or
     operator company has a Companies House number, pull the charges register
-    and use the earliest outstanding charge's ``created_on`` plus a typical
-    25-year amortisation as a proxy for the operating-lease / contract end.
+    and use the *most recent outstanding* charge's ``created_on`` plus a
+    typical 25-year amortisation as a proxy for the operating-lease /
+    contract end. The latest charge is preferred over the earliest because
+    refinanced properties reset the amortisation baseline — using the
+    earliest charge previously produced end-dates in the 1990s/2010s for
+    legacy assets that have been refinanced multiple times.
 
     This is a lower-confidence inference than OCDS award periods, so we only
     write the value when nothing better exists and we record a low
@@ -2009,27 +2029,36 @@ def backfill_contract_dates_from_ch_charges(batch_size: int = 200) -> dict[str, 
                         no_charges += 1
                         continue
 
-                    # Take the earliest outstanding charge — closest to the
-                    # initial financing event for the scheme.
+                    # Pick the most recent outstanding charge — represents the
+                    # current financing baseline. Refinancing resets the
+                    # amortisation clock; picking the earliest charge would
+                    # produce already-expired end dates for older assets.
                     outstanding = [
                         c for c in charges
                         if (c.get("status") or "").lower() in {"outstanding", "partly-satisfied"}
                     ]
                     candidates = outstanding or charges
 
-                    created_dates = [
-                        _parse_ch_date(c.get("created_on"))
+                    dated_charges = [
+                        (_parse_ch_date(c.get("created_on")), c)
                         for c in candidates
                     ]
-                    created_dates = [d for d in created_dates if d]
-                    if not created_dates:
+                    dated_charges = [(d, c) for d, c in dated_charges if d]
+                    if not dated_charges:
                         no_charges += 1
                         continue
 
-                    earliest = min(created_dates)
-                    inferred_end = earliest.replace(
-                        year=earliest.year + _CH_CHARGE_AMORTISATION_YEARS
+                    latest_date, _ = max(dated_charges, key=lambda dc: dc[0])
+                    inferred_end = latest_date.replace(
+                        year=latest_date.year + _CH_CHARGE_AMORTISATION_YEARS
                     )
+
+                    # Skip if the inferred end date is already in the past —
+                    # the company evidently hasn't refinanced and we have no
+                    # signal on actual operations.
+                    if inferred_end < datetime.date.today():
+                        no_charges += 1
+                        continue
 
                     scheme.contract_end_date = inferred_end
                     # Tag the source so it's clear this was inferred, not
@@ -2046,7 +2075,7 @@ def backfill_contract_dates_from_ch_charges(batch_size: int = 200) -> dict[str, 
                         "backfill_ch_charges_inferred",
                         scheme_id=scheme.id,
                         ch_number=company.companies_house_number,
-                        earliest_charge=earliest.isoformat(),
+                        latest_charge=latest_date.isoformat(),
                         inferred_end=inferred_end.isoformat(),
                     )
 
@@ -2106,6 +2135,418 @@ def flag_leasehold_schemes_for_review() -> dict[str, Any]:
         }
         logger.info("flag_leasehold_review", **result)
         return result
+
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Google Places — CSAT / review enrichment for the BD score
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.enrichment_tasks.enrich_google_reviews",
+    acks_late=True,
+    time_limit=21600,
+    soft_time_limit=21000,
+)
+def enrich_google_reviews(
+    council_filter: list[str] | None = None,
+    scheme_types: list[str] | None = None,
+    limit: int = 200,
+    recheck_after_days: int = 90,
+) -> dict[str, Any]:
+    """Fetch Google Places ratings + review counts for BD-typed schemes.
+
+    Strategy:
+    - Pick BD-typed schemes (BTR/PBSA/Co-living/Senior) optionally filtered
+      by council. Skip schemes checked within the last ``recheck_after_days``.
+    - Look up each scheme by name + city/address on Google Places.
+    - Persist rating, review_count, place_id, checked_at.
+
+    Cost: ~$0.034/scheme on the legacy Places API (Find Place + Details).
+    The first $200/month is free across all Google APIs combined ≈ 12k
+    schemes/month at no cost.
+    """
+    db = _get_db()
+    try:
+        from app.enrichment.google_places import GooglePlacesClient
+        from app.models.models import Council, ExistingScheme
+
+        try:
+            client = GooglePlacesClient()
+        except RuntimeError as exc:
+            logger.warning("google_places_key_missing", error=str(exc))
+            return {"status": "skipped", "reason": "no_api_key"}
+
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+            days=recheck_after_days
+        )
+
+        q = (
+            db.query(ExistingScheme)
+            .join(ExistingScheme.council)
+            .filter(
+                ExistingScheme.scheme_type.in_(
+                    scheme_types or ["BTR", "PBSA", "Co-living", "Senior"]
+                )
+            )
+            .filter(
+                or_(
+                    ExistingScheme.google_checked_at.is_(None),
+                    ExistingScheme.google_checked_at < cutoff,
+                )
+            )
+        )
+        if council_filter:
+            q = q.filter(Council.name.in_(council_filter))
+        q = q.order_by(ExistingScheme.num_units.desc().nullslast()).limit(limit)
+        schemes = q.all()
+
+        logger.info(
+            "google_reviews_enrich_start",
+            count=len(schemes),
+            council_filter=council_filter,
+        )
+
+        n_hit = 0
+        n_miss = 0
+        with client as gp:
+            for scheme in schemes:
+                # Build address hint from postcode or council name
+                address_hint = scheme.postcode or (
+                    scheme.council.name if scheme.council else None
+                )
+                result = gp.lookup_scheme(scheme.name, address_hint)
+                scheme.google_checked_at = datetime.datetime.now(datetime.timezone.utc)
+                if result:
+                    scheme.google_place_id = result.get("place_id")
+                    scheme.google_rating = result.get("rating")
+                    scheme.google_review_count = result.get("user_ratings_total")
+                    n_hit += 1
+                else:
+                    n_miss += 1
+                # Commit every 25 schemes to flush progress
+                if (n_hit + n_miss) % 25 == 0:
+                    db.commit()
+            db.commit()
+
+        result = {
+            "scanned": len(schemes),
+            "hit": n_hit,
+            "miss": n_miss,
+        }
+        logger.info("google_reviews_enrich_done", **result)
+        return result
+
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Companies House — financial distress signals for the BD score
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    name="app.tasks.enrichment_tasks.enrich_arrears_risk",
+    acks_late=True,
+    time_limit=21600,       # 6h hard limit
+    soft_time_limit=21000,  # 5h50m soft limit
+)
+def enrich_arrears_risk(limit: int = 200) -> dict[str, Any]:
+    """Compute a 0-100 arrears/distress risk score for each scheme's
+    operator (or owner if operator missing).
+
+    Signals (each contributes to the score):
+    - Late filings: accounts/confirmation statement overdue or filed late
+      in the last 12 months. (+20-40 depending on severity)
+    - Recent charges: a NEW debenture/mortgage registered in the last 6
+      months suggests refinancing pressure. (+15)
+    - Multiple satisfied charges followed by a new charge: serial
+      refinancing. (+15)
+    - Inactive / dissolved status: parent in legal trouble. (+30)
+    - No signals: defaults to 30 (neutral, low-distress baseline)
+
+    Uses the existing CompaniesHouseScraper.
+    """
+    db = _get_db()
+    try:
+        from app.models.models import Company, ExistingScheme
+        from app.scrapers.companies_house_scraper import CompaniesHouseScraper
+
+        # Schemes where we have a company (operator or owner) with a CH number
+        # but haven't computed arrears_risk_score recently.
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=90)
+        schemes = (
+            db.query(ExistingScheme)
+            .filter(ExistingScheme.scheme_type.in_(["BTR", "PBSA", "Co-living", "Senior"]))
+            .filter(
+                or_(
+                    ExistingScheme.operator_company_id.isnot(None),
+                    ExistingScheme.owner_company_id.isnot(None),
+                )
+            )
+            .filter(
+                or_(
+                    ExistingScheme.arrears_checked_at.is_(None),
+                    ExistingScheme.arrears_checked_at < cutoff,
+                )
+            )
+            .order_by(ExistingScheme.num_units.desc().nullslast())
+            .limit(limit)
+            .all()
+        )
+
+        async def _process_all() -> tuple[int, int]:
+            hits = 0
+            errors = 0
+            scraper = CompaniesHouseScraper()
+            try:
+                for scheme in schemes:
+                    company_id = scheme.operator_company_id or scheme.owner_company_id
+                    if not company_id:
+                        continue
+                    company = db.query(Company).get(company_id)
+                    if not company or not company.companies_house_number:
+                        continue
+
+                    ch_number = company.companies_house_number
+                    try:
+                        profile = await scraper.get_company(ch_number)
+                    except Exception:
+                        errors += 1
+                        continue
+
+                    score = 30.0  # neutral baseline
+                    if profile:
+                        # Inactive / dissolved is a strong distress signal
+                        status = (profile.get("company_status") or "").lower()
+                        if status in ("dissolved", "liquidation", "receivership", "administration"):
+                            score += 40.0
+                        elif status == "active":
+                            pass  # no penalty
+                        else:
+                            score += 10.0
+
+                        # Overdue accounts
+                        accounts = profile.get("accounts") or {}
+                        if accounts.get("overdue") is True:
+                            score += 25.0
+
+                        # Overdue confirmation statement
+                        cs = profile.get("confirmation_statement") or {}
+                        if cs.get("overdue") is True:
+                            score += 15.0
+
+                    # Recent charge events — refinancing pressure indicator
+                    try:
+                        charges = await scraper.get_charges(ch_number)
+                    except Exception:
+                        charges = []
+
+                    if charges:
+                        recent_charges = [
+                            c for c in charges
+                            if _parse_ch_date(c.get("created_on"))
+                            and (_parse_ch_date(c.get("created_on")) >
+                                 datetime.date.today() - datetime.timedelta(days=180))
+                        ]
+                        if len(recent_charges) >= 1:
+                            score += 15.0
+                        # Many satisfied historical charges + new charge = serial refi
+                        satisfied = sum(
+                            1 for c in charges
+                            if (c.get("status") or "").lower() == "satisfied"
+                        )
+                        if satisfied >= 3 and len(recent_charges) >= 1:
+                            score += 15.0
+
+                    score = max(0.0, min(100.0, score))
+                    scheme.arrears_risk_score = score
+                    scheme.arrears_checked_at = datetime.datetime.now(datetime.timezone.utc)
+                    hits += 1
+
+                    if hits % 25 == 0:
+                        db.commit()
+                db.commit()
+                return hits, errors
+            finally:
+                await scraper.close()
+
+        hits, errors = _run_async(_process_all())
+
+        result = {"scanned": len(schemes), "hits": hits, "errors": errors}
+        logger.info("arrears_risk_enrich_done", **result)
+        return result
+
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Council-id backfill via Postcodes.io
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    bind=True,
+    name="app.tasks.enrichment_tasks.backfill_scheme_council_ids",
+    queue="enrichment",
+    soft_time_limit=1200,
+    time_limit=1500,
+)
+def backfill_scheme_council_ids(self, batch_size: int = 100) -> dict[str, Any]:
+    """Backfill ``existing_schemes.council_id`` for rows where it is NULL.
+
+    Two-stage strategy:
+      1. Cheap pass: for each NULL-council scheme with a postcode, see if
+         another scheme already maps that outcode to a council, and reuse it.
+      2. External pass: any postcodes the cheap pass didn't resolve are batched
+         to Postcodes.io (free, no key) — and new councils are created when
+         the returned ``admin_district`` doesn't already exist in our table.
+
+    Designed to be re-runnable after each scrape pass — only acts on rows
+    where ``council_id IS NULL``, so doing nothing is the fast path.
+    """
+    import time
+    import httpx
+    from sqlalchemy import text
+
+    db = _get_db()
+    stats: dict[str, Any] = {
+        "stage1_outcode_backfilled": 0,
+        "stage2_postcodes_io_resolved": 0,
+        "stage2_postcodes_io_attempted": 0,
+        "councils_created": 0,
+        "remaining_null": 0,
+    }
+    try:
+        # Cheap stage: outcode-based reuse of council mapping
+        result = db.execute(text("""
+            WITH outcode_council AS (
+                SELECT UPPER(SPLIT_PART(postcode, ' ', 1)) AS outcode,
+                       council_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY UPPER(SPLIT_PART(postcode, ' ', 1))
+                           ORDER BY COUNT(*) DESC
+                       ) AS rnk
+                FROM existing_schemes
+                WHERE council_id IS NOT NULL
+                  AND COALESCE(postcode, '') <> ''
+                GROUP BY outcode, council_id
+            ),
+            best_for_outcode AS (
+                SELECT outcode, council_id FROM outcode_council WHERE rnk = 1
+            )
+            UPDATE existing_schemes orphan
+            SET council_id = b.council_id
+            FROM best_for_outcode b
+            WHERE orphan.council_id IS NULL
+              AND COALESCE(orphan.postcode, '') <> ''
+              AND UPPER(SPLIT_PART(orphan.postcode, ' ', 1)) = b.outcode
+        """))
+        stats["stage1_outcode_backfilled"] = result.rowcount
+        db.commit()
+
+        # External stage: hit Postcodes.io for what's left
+        postcodes = [r[0] for r in db.execute(text("""
+            SELECT DISTINCT UPPER(TRIM(postcode))
+            FROM existing_schemes
+            WHERE council_id IS NULL AND COALESCE(postcode,'') <> ''
+            ORDER BY 1
+        """))]
+        stats["stage2_postcodes_io_attempted"] = len(postcodes)
+
+        if postcodes:
+            council_cache: dict[str, int | None] = {}
+            existing_council_ids_before = {
+                r[0] for r in db.execute(text("SELECT id FROM councils"))
+            }
+            with httpx.Client(timeout=30.0) as client:
+                for i in range(0, len(postcodes), batch_size):
+                    batch = postcodes[i:i + batch_size]
+                    try:
+                        r = client.post(
+                            "https://api.postcodes.io/postcodes",
+                            json={"postcodes": batch},
+                        )
+                        if r.status_code != 200:
+                            logger.warning(
+                                "postcodesio_http_error",
+                                status=r.status_code, batch_start=i,
+                            )
+                            continue
+                        data = r.json().get("result", []) or []
+                    except Exception as e:
+                        logger.warning(
+                            "postcodesio_request_error",
+                            error=str(e)[:200], batch_start=i,
+                        )
+                        continue
+
+                    for entry in data:
+                        query_pc = (entry.get("query") or "").upper()
+                        res = entry.get("result")
+                        if not res:
+                            continue
+                        admin_district = (
+                            res.get("admin_district") or res.get("admin_county") or ""
+                        ).strip()
+                        country = res.get("country")
+                        if not admin_district:
+                            continue
+
+                        # Find or create council
+                        if admin_district.lower() in council_cache:
+                            cid = council_cache[admin_district.lower()]
+                        else:
+                            row = db.execute(text(
+                                "SELECT id FROM councils WHERE LOWER(name) = LOWER(:n) LIMIT 1"
+                            ), {"n": admin_district}).first()
+                            if row:
+                                cid = row[0]
+                            else:
+                                new_row = db.execute(text("""
+                                    INSERT INTO councils (name, region, active,
+                                                          created_at, updated_at)
+                                    VALUES (:n, :r, TRUE, NOW(), NOW())
+                                    RETURNING id
+                                """), {
+                                    "n": admin_district[:200],
+                                    "r": (country or "")[:100] or None,
+                                }).first()
+                                cid = new_row[0]
+                                logger.info("council_created",
+                                            name=admin_district, country=country,
+                                            id=cid)
+                            council_cache[admin_district.lower()] = cid
+
+                        # Update schemes with this postcode
+                        upd = db.execute(text("""
+                            UPDATE existing_schemes
+                            SET council_id = :cid
+                            WHERE council_id IS NULL
+                              AND UPPER(REPLACE(postcode, ' ', ''))
+                                  = REPLACE(:pc, ' ', '')
+                        """), {"cid": cid, "pc": query_pc})
+                        stats["stage2_postcodes_io_resolved"] += upd.rowcount
+
+                    db.commit()
+                    # Stay polite — 600 req/min limit is generous; 1 req/sec is fine
+                    time.sleep(0.2)
+
+            existing_council_ids_after = {
+                r[0] for r in db.execute(text("SELECT id FROM councils"))
+            }
+            stats["councils_created"] = len(
+                existing_council_ids_after - existing_council_ids_before
+            )
+
+        stats["remaining_null"] = db.execute(text(
+            "SELECT COUNT(*) FROM existing_schemes WHERE council_id IS NULL"
+        )).scalar() or 0
+
+        logger.info("backfill_council_ids_done", **stats)
+        return stats
 
     finally:
         db.close()

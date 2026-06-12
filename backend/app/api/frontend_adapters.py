@@ -107,6 +107,111 @@ def dashboard_stats_adapted(current_user: User = Depends(get_current_user), db: 
 
 
 # =========================================================================
+# 1b. GET /api/dashboard/data-quality
+# =========================================================================
+
+class DataQualityFieldStat(BaseModel):
+    field: str
+    label: str
+    fill_pct: int
+    filled: int
+    missing: int
+    total: int
+
+
+class DataQualityStats(BaseModel):
+    bd_cohort_total: int
+    total_schemes: int
+    fields: list[DataQualityFieldStat]
+
+
+# BD-addressable cohort: operating schemes that should have a third-party
+# management contract with a real end date. EPC-sourced individual dwellings
+# and HA-owned stock are excluded because the metric doesn't apply to them.
+_BD_SCHEME_TYPES = ["BTR", "PBSA", "Co-living", "Senior"]
+_BD_SOURCES = ["arl_btr_open_operating", "pbsa_operator", "find_a_tender"]
+
+
+@router.get("/dashboard/data-quality", response_model=DataQualityStats)
+def dashboard_data_quality(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return fill rates for key scheme fields, scoped to the BD-addressable
+    cohort (BTR/PBSA/Co-living/Senior from operator-listing and tender feeds).
+
+    The full population is dominated by individual EPC dwellings and HA-owned
+    stock that don't conceptually have third-party operating contracts, so a
+    "% missing" computed across all schemes is misleading. This endpoint
+    answers the right question: "of the schemes we actually want to do BD on,
+    how much do we know?"
+    """
+    bd_filter = and_(
+        ExistingScheme.scheme_type.in_(_BD_SCHEME_TYPES),
+        ExistingScheme.source.in_(_BD_SOURCES),
+    )
+
+    def _bd_count(*filters):
+        q = db.query(func.count(ExistingScheme.id)).filter(bd_filter)
+        for f in filters:
+            q = q.filter(f)
+        return q.scalar() or 0
+
+    bd_total = _bd_count()
+    total_schemes = db.query(func.count(ExistingScheme.id)).scalar() or 0
+
+    def _field_stat(field_label: str, field_name: str, filled_filter) -> DataQualityFieldStat:
+        filled = _bd_count(filled_filter)
+        missing = bd_total - filled
+        pct = round(100 * filled / bd_total) if bd_total else 0
+        return DataQualityFieldStat(
+            field=field_name,
+            label=field_label,
+            fill_pct=pct,
+            filled=filled,
+            missing=missing,
+            total=bd_total,
+        )
+
+    fields = [
+        _field_stat(
+            "Contract End Date", "contract_end_date",
+            ExistingScheme.contract_end_date.isnot(None),
+        ),
+        _field_stat(
+            "Operator Company", "operator_company_id",
+            ExistingScheme.operator_company_id.isnot(None),
+        ),
+        _field_stat(
+            "Owner Company", "owner_company_id",
+            ExistingScheme.owner_company_id.isnot(None),
+        ),
+        _field_stat(
+            "Postcode", "postcode",
+            and_(ExistingScheme.postcode.isnot(None), ExistingScheme.postcode != ""),
+        ),
+        _field_stat(
+            "Address", "address",
+            and_(ExistingScheme.address.isnot(None), ExistingScheme.address != ""),
+        ),
+        _field_stat(
+            "Performance Rating", "performance_rating",
+            ExistingScheme.performance_rating.isnot(None),
+        ),
+        _field_stat(
+            "Source Reference", "source_reference",
+            and_(ExistingScheme.source_reference.isnot(None), ExistingScheme.source_reference != ""),
+        ),
+    ]
+
+    return DataQualityStats(
+        bd_cohort_total=bd_total,
+        total_schemes=total_schemes,
+        fields=fields,
+    )
+
+
+# =========================================================================
 # 2. GET /api/dashboard/trends?days=30
 # =========================================================================
 
@@ -258,6 +363,7 @@ class ApplicationFlat(BaseModel):
     applicant: Optional[str] = None
     date: Optional[str] = None
     bd_score: Optional[float] = None
+    bd_breakdown: Optional[dict] = None  # 5-dim app scorer: size/scheme_type/planning_stage/recency/applicant_signal
     description: Optional[str] = None
     case_officer: Optional[str] = None
     decision_date: Optional[str] = None
@@ -310,10 +416,43 @@ def list_applications_flat(
     search: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_dir: Optional[str] = "desc",
+    # New filters
+    bd_actionable: Optional[bool] = Query(
+        None,
+        description="When true, only return applications in planning stage "
+                    "(Pending/Pre-Application/Submitted) AND (num_units >= 20 OR "
+                    "scheme_type in BTR/PBSA/Co-living/Senior/Affordable/Mixed). "
+                    "Excludes brownfield register entries.",
+    ),
+    btr_eligible: Optional[bool] = Query(
+        None,
+        description="When true, return applications likely to become BTR even if "
+                    "not explicitly classified. Union of: explicit BTR; "
+                    "description mentioning build-to-rent / PRS / private rented; "
+                    "applicant is a known BTR developer/operator; or 100+ unit "
+                    "Residential/Mixed/Unknown schemes (size-led BTR proxy). "
+                    "Excludes Senior/Affordable/PBSA/Co-living (different products).",
+    ),
+    min_units: Optional[int] = Query(None, ge=0),
+    max_units: Optional[int] = Query(None, ge=0),
+    submitted_within_days: Optional[int] = Query(
+        None, ge=1, le=3650,
+        description="Only return apps with submission_date in the last N days.",
+    ),
+    has_applicant: Optional[bool] = Query(
+        None,
+        description="Filter by whether applicant_name is populated.",
+    ),
+    application_type: Optional[str] = None,
+    exclude_brownfield: Optional[bool] = Query(
+        True,
+        description="Exclude brownfield-register entries from results (default True).",
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from sqlalchemy import or_, desc as sa_desc, asc as sa_asc
+    from sqlalchemy import or_, and_, desc as sa_desc, asc as sa_asc
+    import datetime
 
     query = (
         db.query(PlanningApplication)
@@ -335,6 +474,88 @@ def list_applications_flat(
         query = query.filter(PlanningApplication.scheme_type == scheme_type)
     if status is not None:
         query = query.filter(PlanningApplication.status == status)
+    if application_type is not None:
+        query = query.filter(PlanningApplication.application_type == application_type)
+    if min_units is not None:
+        query = query.filter(PlanningApplication.num_units >= min_units)
+    if max_units is not None:
+        query = query.filter(PlanningApplication.num_units <= max_units)
+    if submitted_within_days is not None:
+        cutoff = datetime.date.today() - datetime.timedelta(days=submitted_within_days)
+        query = query.filter(PlanningApplication.submission_date >= cutoff)
+    if has_applicant is True:
+        query = query.filter(
+            and_(
+                PlanningApplication.applicant_name.isnot(None),
+                PlanningApplication.applicant_name != "",
+            )
+        )
+    elif has_applicant is False:
+        query = query.filter(
+            or_(
+                PlanningApplication.applicant_name.is_(None),
+                PlanningApplication.applicant_name == "",
+            )
+        )
+    if exclude_brownfield:
+        # Brownfield-register entries leaked in via the brownfield_scraper before
+        # they were split into a dedicated table. Any residual ones can be
+        # identified by the "brownfield:" prefix on reference.
+        query = query.filter(~PlanningApplication.reference.like("brownfield:%"))
+    if bd_actionable:
+        BD_TYPES = ("BTR", "PBSA", "Co-living", "Senior", "Affordable", "Mixed")
+        query = query.filter(
+            PlanningApplication.status.in_(("Pending", "Pre-Application", "Submitted"))
+        )
+        query = query.filter(
+            or_(
+                PlanningApplication.num_units >= 20,
+                PlanningApplication.scheme_type.in_(BD_TYPES),
+            )
+        )
+    if btr_eligible:
+        # Combined heuristic for "likely BTR" apps that the explicit scheme_type
+        # classifier misses. See the param docstring for the union breakdown.
+        from app.scoring.bd_scorer import _KNOWN_DEVELOPER_FRAGMENTS
+        # Build a regex of operator fragments. The fragments are already
+        # lowercase substrings; wrap them in alternation for ILIKE.
+        BTR_OP_PAT = "|".join(
+            re.escape(frag) for frag in _KNOWN_DEVELOPER_FRAGMENTS
+        )
+        BTR_DESC_PAT = (
+            r"build[- ]to[- ]rent|\bbtr\b|\bprs\b|private rented sector|"
+            r"private rented|rental homes|rental apartments"
+        )
+        # Hard-exclude products that are definitively NOT BTR
+        NON_BTR_TYPES = ("Senior", "Affordable", "PBSA", "Co-living")
+        query = query.filter(
+            or_(
+                PlanningApplication.scheme_type.is_(None),
+                ~PlanningApplication.scheme_type.in_(NON_BTR_TYPES),
+            )
+        )
+        # Union of BTR-eligibility signals
+        query = query.filter(
+            or_(
+                # Signal 1: explicit BTR classification
+                PlanningApplication.scheme_type == "BTR",
+                # Signal 2: description mentions BTR / PRS / rental tenure
+                PlanningApplication.description.op("~*")(BTR_DESC_PAT),
+                # Signal 3: applicant matches a known BTR developer/operator
+                PlanningApplication.applicant_name.op("~*")(BTR_OP_PAT),
+                # Signal 4: large-scale Residential / Mixed / Unknown
+                # (size-led — most large mixed-tenure schemes go BTR these days)
+                and_(
+                    PlanningApplication.num_units >= 100,
+                    or_(
+                        PlanningApplication.scheme_type.in_(
+                            ("Residential", "Mixed", "Unknown")
+                        ),
+                        PlanningApplication.scheme_type.is_(None),
+                    ),
+                ),
+            )
+        )
     if search is not None:
         pattern = f"%{search}%"
         query = query.filter(
@@ -355,7 +576,9 @@ def list_applications_flat(
     sort_map = {
         "units": PlanningApplication.num_units,
         "date": PlanningApplication.submission_date,
-        "bd_score": PlanningApplication.num_units,  # proxy: larger = higher BD value
+        # Use the persisted bd_score column (backfilled by backfill_bd_scores.py).
+        # Falls back to num_units only if bd_score is NULL.
+        "bd_score": PlanningApplication.bd_score,
     }
     order_col = sort_map.get(sort_by, PlanningApplication.submission_date)
     items = (
@@ -403,9 +626,15 @@ def list_applications_flat(
 
     flat_items: list[ApplicationFlat] = []
     for app in items:
-        bd_score = _compute_bd_score(app)
-        if app.pipeline_opportunity and app.pipeline_opportunity.bd_score:
+        # Prefer the persisted bd_score column (computed by the canonical BD
+        # scorer + backfilled by backfill_bd_scores.py). Fall back to the
+        # legacy inline computation only when the column is NULL.
+        if app.bd_score is not None:
+            bd_score = round(float(app.bd_score), 1)
+        elif app.pipeline_opportunity and app.pipeline_opportunity.bd_score:
             bd_score = app.pipeline_opportunity.bd_score
+        else:
+            bd_score = _compute_bd_score(app)
 
         flat_items.append(
             ApplicationFlat(
@@ -424,6 +653,10 @@ def list_applications_flat(
                     else None
                 ),
                 bd_score=bd_score,
+                bd_breakdown=(
+                    {k: v for k, v in app.bd_score_breakdown.items() if k != "composite"}
+                    if app.bd_score_breakdown else None
+                ),
                 description=app.description,
                 case_officer=getattr(app, 'case_officer', None),
                 decision_date=(
@@ -576,6 +809,18 @@ class ScoreBreakdownFlat(BaseModel):
     scheme_size: float = 0
 
 
+class CanonicalScoreBreakdown(BaseModel):
+    """4-dimension scorer breakdown matching the BD playbook.
+
+    Populated by `backfill_bd_scores.py` via `BDScorer`. Surfaces in API
+    responses so the frontend can show 'why this scheme scored X'.
+    """
+    contract_urgency: float = 0
+    csat_gap: float = 0
+    occupancy_gap: float = 0
+    financial_distress: float = 0
+
+
 class SchemeFlat(BaseModel):
     id: str
     name: str
@@ -603,11 +848,17 @@ class SchemeFlat(BaseModel):
     occupancy_rate: Optional[float] = None
     revenue_per_unit: Optional[float] = None
     score_breakdown: Optional[ScoreBreakdownFlat] = None
+    # Canonical 4-dimension BD breakdown (BDScorer output). Populated when
+    # the persisted bd_score_breakdown column is set.
+    bd_breakdown: Optional[CanonicalScoreBreakdown] = None
     operator_company_id: Optional[str] = None
     pipeline_opportunity_id: Optional[str] = None
     locked_fields: dict[str, str] = {}
     min_rent_per_week: Optional[float] = None
     rent_tier_count: int = 0
+    # Arrears (operator financial distress, 0-100; higher = more distress).
+    arrears_risk_score: Optional[float] = None
+    arrears_checked_at: Optional[str] = None
 
 
 class SchemeFlatListResponse(BaseModel):
@@ -746,6 +997,13 @@ def list_schemes_flat(
     max_rent_per_week: Optional[float] = Query(None, description="Maximum weekly rent filter"),
     contract_end_within_days: Optional[int] = Query(None, description="Contract ends within N days from now"),
     operator_company_id: Optional[list[int]] = Query(None, description="Filter by operator company id(s) (repeatable)"),
+    min_arrears: Optional[float] = Query(None, ge=0, le=100, description="Filter schemes with arrears_risk_score >= this"),
+    scheme_ids: Optional[list[int]] = Query(
+        None,
+        description="Fetch only these specific scheme ids (repeatable). Used by "
+                    "deep-link surfaces (e.g. /arrears) that need a scheme to "
+                    "appear regardless of pagination/sort.",
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -812,6 +1070,12 @@ def list_schemes_flat(
         query = query.filter(ExistingScheme.num_units >= min_units)
     if max_units is not None:
         query = query.filter(ExistingScheme.num_units <= max_units)
+    if min_arrears is not None:
+        # Filter to schemes with arrears risk at or above the threshold.
+        # NULL arrears are excluded (we can't claim distress on un-scored rows).
+        query = query.filter(ExistingScheme.arrears_risk_score >= min_arrears)
+    if scheme_ids:
+        query = query.filter(ExistingScheme.id.in_(scheme_ids))
 
     # Per-scheme rent summary (min + count) as a subquery we can reuse
     # for filtering, sorting, and response population.
@@ -863,7 +1127,9 @@ def list_schemes_flat(
     elif sort_by == "contract_end":
         sort_column = ExistingScheme.contract_end_date
     elif sort_by == "bd_score":
-        sort_column = ExistingScheme.num_units  # fallback; bd_score is computed
+        # Sort by the persisted bd_score column (backfilled by
+        # backfill_bd_scores.py). NULLs sort last via nulls_last() below.
+        sort_column = ExistingScheme.bd_score
     elif sort_by == "min_rent":
         # Join the subquery if not already joined (outer to preserve schemes without rent)
         if not rent_join_applied:
@@ -902,12 +1168,19 @@ def list_schemes_flat(
 
     flat_items: list[SchemeFlat] = []
     for scheme in items:
-        # BD score: prefer stored pipeline_opportunity, else compute on-the-fly
+        # BD score lookup order:
+        # 1. Persisted `bd_score` column (from canonical BDScorer backfill)
+        # 2. Stored pipeline_opportunity score (manual override)
+        # 3. Inline fallback (only when neither is set — e.g. brand-new scheme)
         bd_score: Optional[float] = None
         priority: Optional[str] = None
         breakdown = _compute_score_breakdown(scheme, db)
 
-        if scheme.pipeline_opportunity and scheme.pipeline_opportunity.bd_score is not None:
+        # Prefer persisted canonical bd_score
+        if scheme.bd_score is not None:
+            bd_score = round(float(scheme.bd_score), 1)
+            priority = _derive_priority(bd_score)
+        elif scheme.pipeline_opportunity and scheme.pipeline_opportunity.bd_score is not None:
             bd_score = scheme.pipeline_opportunity.bd_score
             priority = _PRIORITY_TO_FRONTEND.get(
                 scheme.pipeline_opportunity.priority,
@@ -952,11 +1225,27 @@ def list_schemes_flat(
                 occupancy_rate=None,
                 revenue_per_unit=None,
                 score_breakdown=breakdown,
+                bd_breakdown=(
+                    CanonicalScoreBreakdown(
+                        contract_urgency=scheme.bd_score_breakdown.get("contract_urgency", 0),
+                        csat_gap=scheme.bd_score_breakdown.get("csat_gap", 0),
+                        occupancy_gap=scheme.bd_score_breakdown.get("occupancy_gap", 0),
+                        financial_distress=scheme.bd_score_breakdown.get("financial_distress", 0),
+                    ) if scheme.bd_score_breakdown else None
+                ),
                 operator_company_id=str(scheme.operator_company_id) if scheme.operator_company_id else None,
                 pipeline_opportunity_id=str(scheme.pipeline_opportunity.id) if scheme.pipeline_opportunity else None,
                 locked_fields=scheme.locked_fields or {},
                 min_rent_per_week=rent_by_scheme.get(scheme.id, (None, 0))[0],
                 rent_tier_count=rent_by_scheme.get(scheme.id, (None, 0))[1],
+                arrears_risk_score=(
+                    round(float(scheme.arrears_risk_score), 1)
+                    if scheme.arrears_risk_score is not None else None
+                ),
+                arrears_checked_at=(
+                    scheme.arrears_checked_at.isoformat()
+                    if scheme.arrears_checked_at else None
+                ),
             )
         )
 

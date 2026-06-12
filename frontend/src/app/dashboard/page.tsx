@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import {
   CurrencyPoundIcon,
   RocketLaunchIcon,
@@ -10,7 +11,9 @@ import {
   CalendarDaysIcon,
   ArrowPathIcon,
   ArrowRightIcon,
+  FireIcon,
 } from '@heroicons/react/24/outline';
+import { cn } from '@/lib/utils';
 import {
   PieChart,
   Pie,
@@ -32,6 +35,80 @@ import Badge from '@/components/ui/Badge';
 import { formatDate, getSchemeTypeColor, getPriorityColor, getStageColor, getBdScoreColor } from '@/lib/utils';
 import api from '@/lib/api';
 import type { DashboardStats, TrendDataPoint } from '@/lib/api';
+
+// ── Arrears overview types (subset consumed by the distress tile) ──────────
+
+interface ArrearsOverviewKPIs {
+  critical_count: number;
+  distressed_count: number;
+  caution_count: number;
+  healthy_count: number;
+  distressed_operators: number;
+  newly_flagged_7d: number;
+}
+
+interface ArrearsOverviewSlim {
+  kpis: ArrearsOverviewKPIs;
+}
+
+// ── Distress stat tile (matches StatsCard visual style + adds subtitle) ─────
+
+function DistressTile({
+  atRisk,
+  critical,
+  newlyFlagged,
+  loading,
+}: {
+  atRisk: number;
+  critical: number;
+  newlyFlagged: number;
+  loading: boolean;
+}) {
+  const tone = critical > 0 ? 'red' : 'amber';
+  const gradient =
+    tone === 'red'
+      ? 'linear-gradient(180deg, #ef4444, #dc2626)'
+      : 'linear-gradient(180deg, #f59e0b, #d97706)';
+  const iconBg =
+    tone === 'red' ? 'bg-red-500/10 text-red-400' : 'bg-amber-500/10 text-amber-400';
+
+  return (
+    <Link href="/arrears" className="block focus:outline-none focus:ring-2 focus:ring-red-500/50 rounded-xl">
+      <div className="relative bg-slate-800/90 border border-slate-700/50 rounded-xl p-5 shadow-lg card-hover-lift overflow-hidden group cursor-pointer">
+        {/* Gradient left accent */}
+        <div
+          className="absolute left-0 top-3 bottom-3 w-[3px] rounded-r-full"
+          style={{ background: gradient }}
+        />
+        {/* Hover overlay matching StatsCard */}
+        <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-gradient-to-br from-red-500/[0.04] to-orange-500/[0.04] pointer-events-none" />
+
+        <div className="flex items-start justify-between relative">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">
+              Schemes in distress
+            </p>
+            <p className="mt-2 text-2xl font-bold text-white">
+              {loading ? '---' : atRisk.toLocaleString()}
+            </p>
+            <p className="mt-1.5 text-[11px] text-slate-400">
+              <span className={cn('font-semibold', critical > 0 ? 'text-red-400' : 'text-slate-400')}>
+                Critical: {loading ? '—' : critical}
+              </span>
+              <span className="text-slate-600 mx-1.5">|</span>
+              <span className={cn('font-semibold', newlyFlagged > 0 ? 'text-amber-400' : 'text-slate-400')}>
+                Newly flagged 7d: {loading ? '—' : newlyFlagged}
+              </span>
+            </p>
+          </div>
+          <div className={cn('p-2.5 rounded-lg', iconBg)}>
+            <FireIcon className="w-5 h-5" />
+          </div>
+        </div>
+      </div>
+    </Link>
+  );
+}
 
 // ── Mini Sparkline for table ──────────────────────────────
 
@@ -68,11 +145,17 @@ export default function DashboardPage() {
   const [topOpportunities, setTopOpportunities] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [dataQuality, setDataQuality] = useState<{
+    bd_cohort_total: number;
+    total_schemes: number;
+    fields: { field: string; label: string; fill_pct: number; filled: number; missing: number; total: number }[];
+  } | null>(null);
 
   const [schemeTypeData, setSchemeTypeData] = useState<{ name: string; value: number; color: string }[]>([]);
   const [funnelStages, setFunnelStages] = useState<{ stage: string; count: number; color: string }[]>([]);
   const [alertsFeed, setAlertsFeed] = useState<{ id: string; text: string; time: string; type: string; dot: string }[]>([]);
   const [contractExpiryData, setContractExpiryData] = useState<{ month: string; count: number; fill: string }[]>([]);
+  const [arrearsKpis, setArrearsKpis] = useState<ArrearsOverviewKPIs | null>(null);
 
   const SCHEME_TYPE_COLORS: Record<string, string> = {
     'Social Housing': '#a855f7', 'Managed Scheme': '#3b82f6', 'Affordable': '#10b981',
@@ -96,6 +179,7 @@ export default function DashboardPage() {
   useEffect(() => {
     Promise.all([
       api.get('/dashboard/stats').then(res => res.data).catch(() => null),
+      api.get('/dashboard/data-quality').then(res => res.data).catch(() => null),
       api.get('/dashboard/trends', { params: { days: 30 } }).then(res => res.data).catch(() => []),
       api.get('/dashboard/top-opportunities').then(res => res.data).catch(() => []),
       // Real scheme type distribution
@@ -123,6 +207,8 @@ export default function DashboardPage() {
           type: a.type, dot: ALERT_DOT_COLORS[a.type] || '#64748b',
         }));
       }).catch(() => []),
+      // Arrears overview KPIs (for distress stat tile)
+      api.get('/v2/arrears/overview').then(res => (res.data as ArrearsOverviewSlim)?.kpis || null).catch(() => null),
       // Real contract expiry timeline
       api.get('/schemes/contract-timeline').then(res => {
         const timeline = res.data?.timeline || {};
@@ -136,13 +222,15 @@ export default function DashboardPage() {
           return { month: monthDate.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }), count: contracts.length, fill };
         });
       }).catch(() => []),
-    ]).then(([statsData, trendsData, oppsData, schemeTypes, funnel, alerts, contractExpiry]) => {
+    ]).then(([statsData, dqData, trendsData, oppsData, schemeTypes, funnel, alerts, arrearsKpisData, contractExpiry]) => {
       if (statsData) setStats(statsData);
+      if (dqData) setDataQuality(dqData);
       setTrendData(Array.isArray(trendsData) ? trendsData : trendsData?.items || []);
       setTopOpportunities(Array.isArray(oppsData) ? oppsData : oppsData?.items || []);
       if (Array.isArray(schemeTypes) && schemeTypes.length > 0) setSchemeTypeData(schemeTypes);
       if (Array.isArray(funnel) && funnel.length > 0) setFunnelStages(funnel);
       if (Array.isArray(alerts) && alerts.length > 0) setAlertsFeed(alerts);
+      if (arrearsKpisData) setArrearsKpis(arrearsKpisData);
       if (Array.isArray(contractExpiry) && contractExpiry.length > 0) setContractExpiryData(contractExpiry);
       setLoading(false);
     }).catch(() => {
@@ -169,8 +257,8 @@ export default function DashboardPage() {
             <p className="text-sm text-slate-400 mt-1">{today} &middot; Loading data...</p>
           </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          {[1, 2, 3, 4, 5].map((i) => (
             <div key={i} className="bg-slate-800/80 border border-slate-700/50 rounded-2xl p-6 animate-pulse">
               <div className="h-4 bg-slate-700 rounded w-24 mb-3" />
               <div className="h-8 bg-slate-700 rounded w-16" />
@@ -219,7 +307,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Stats Row ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <StatsCard
           label="Total Applications"
           value={stats ? String(stats.total_applications ?? 0) : '---'}
@@ -247,6 +335,12 @@ export default function DashboardPage() {
           trend={stats?.contracts_trend ?? 0}
           icon={<ExclamationTriangleIcon className="w-5 h-5" />}
           accentColor="red"
+        />
+        <DistressTile
+          atRisk={(arrearsKpis?.distressed_count ?? 0) + (arrearsKpis?.critical_count ?? 0)}
+          critical={arrearsKpis?.critical_count ?? 0}
+          newlyFlagged={arrearsKpis?.newly_flagged_7d ?? 0}
+          loading={!arrearsKpis}
         />
       </div>
 
@@ -483,37 +577,60 @@ export default function DashboardPage() {
       {/* ── Data Quality + Contract Expiry ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Data Quality Gauge */}
-        <Card title="Data Quality Overview" subtitle="Field completeness across schemes" gradientBorder="blue" hoverLift>
+        <Card
+          title="Data Quality Overview"
+          subtitle={
+            dataQuality
+              ? `BD-addressable cohort (BTR / PBSA / Co-living / Senior from operator-listing + tender feeds): ${dataQuality.bd_cohort_total.toLocaleString()} schemes`
+              : 'Field completeness — BD-addressable cohort'
+          }
+          gradientBorder="blue"
+          hoverLift
+        >
           <div className="space-y-3">
-            {[
-              { label: 'Contract End Date', pct: stats ? Math.round((stats.contracts_expiring_6m / Math.max(stats.pipeline_opportunities, 1)) * 100) : 0, color: '#3b82f6', realPct: 38 },
-              { label: 'Operator Company', pct: 31, color: '#8b5cf6' },
-              { label: 'Owner Company', pct: 61, color: '#06b6d4' },
-              { label: 'Source Reference', pct: 72, color: '#10b981' },
-              { label: 'Address', pct: 28, color: '#f59e0b' },
-              { label: 'Performance Rating', pct: 0, color: '#ef4444' },
-              { label: 'Postcode', pct: 0, color: '#ef4444' },
-            ].map((field) => (
-              <div key={field.label} className="group">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm text-slate-300 group-hover:text-white transition-colors">
-                    {field.label}
-                  </span>
-                  <span className={`text-sm font-semibold ${field.pct >= 60 ? 'text-emerald-400' : field.pct >= 30 ? 'text-amber-400' : 'text-red-400'}`}>
-                    {field.pct}%
-                  </span>
+            {(() => {
+              const fieldColors: Record<string, string> = {
+                contract_end_date: '#3b82f6',
+                operator_company_id: '#8b5cf6',
+                owner_company_id: '#06b6d4',
+                source_reference: '#10b981',
+                address: '#f59e0b',
+                performance_rating: '#ef4444',
+                postcode: '#ec4899',
+              };
+              const items = dataQuality
+                ? dataQuality.fields.map(f => ({ label: f.label, pct: f.fill_pct, color: fieldColors[f.field] || '#64748b' }))
+                : [
+                    { label: 'Contract End Date', pct: 0, color: '#3b82f6' },
+                    { label: 'Operator Company', pct: 0, color: '#8b5cf6' },
+                    { label: 'Owner Company', pct: 0, color: '#06b6d4' },
+                    { label: 'Source Reference', pct: 0, color: '#10b981' },
+                    { label: 'Address', pct: 0, color: '#f59e0b' },
+                    { label: 'Performance Rating', pct: 0, color: '#ef4444' },
+                    { label: 'Postcode', pct: 0, color: '#ec4899' },
+                  ];
+              return items.map((field) => (
+                <div key={field.label} className="group">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm text-slate-300 group-hover:text-white transition-colors">
+                      {field.label}
+                    </span>
+                    <span className={`text-sm font-semibold ${field.pct >= 60 ? 'text-emerald-400' : field.pct >= 30 ? 'text-amber-400' : 'text-red-400'}`}>
+                      {field.pct}%
+                    </span>
+                  </div>
+                  <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all duration-700"
+                      style={{
+                        width: `${Math.max(field.pct, 2)}%`,
+                        background: `linear-gradient(90deg, ${field.color}, ${field.color}cc)`,
+                      }}
+                    />
+                  </div>
                 </div>
-                <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-700"
-                    style={{
-                      width: `${Math.max(field.pct, 2)}%`,
-                      background: `linear-gradient(90deg, ${field.color}, ${field.color}cc)`,
-                    }}
-                  />
-                </div>
-              </div>
-            ))}
+              ));
+            })()}
           </div>
         </Card>
 

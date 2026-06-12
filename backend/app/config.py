@@ -6,10 +6,12 @@ from pydantic_settings import BaseSettings
 from pydantic import model_validator
 from typing import Optional
 
-# Explicitly load .env before Settings is created so env vars are always available
+# Explicitly load .env before Settings is created so env vars are always available.
+# override=False so docker-compose / shell env vars take precedence over the file
+# (file values are only used when an env var isn't already set).
 _env_path = Path(__file__).resolve().parent.parent / ".env"
 if _env_path.exists():
-    load_dotenv(_env_path, override=True)
+    load_dotenv(_env_path, override=False)
 
 
 class Settings(BaseSettings):

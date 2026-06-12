@@ -241,12 +241,24 @@ class IdoxScraper(BaseScraper):
         date_to: date | None = None,
         keywords: list[str] | None = None,
         max_pages: int = 20,
+        date_range_threshold: int = 5,
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
         """
-        Search the Idox portal by cycling through keywords and date range.
-        Returns a list of raw result dicts with at least reference and
-        detail_url.
+        Search the Idox portal.
+
+        Strategy (two-pass, broad-then-narrow):
+        1. **Date-range pass** (no keyword) — single search submitting only the
+           date window. Many Idox portals return ALL applications in the
+           window, giving us broad coverage without the keyword fan-out.
+           Fast and gives the best signal for residential-heavy councils
+           like Manchester where keyword search has been failing.
+        2. **Keyword fallback** — if the date-range pass returns fewer than
+           ``date_range_threshold`` results (suggests the portal needs an
+           explicit keyword), iterate through ``SEARCH_KEYWORDS`` for
+           additional coverage.
+
+        Returns deduped list of raw result dicts.
         """
         if date_from is None:
             date_from = date.today() - timedelta(days=180)
@@ -260,33 +272,65 @@ class IdoxScraper(BaseScraper):
         all_results: list[dict[str, Any]] = []
         seen_refs: set[str] = set()
 
-        for keyword in keywords:
-            self.log.info(
-                "keyword_search",
-                keyword=keyword,
-                council=self.council_name,
+        # ---- Pass 1: date-range-only search (broad net) ----
+        self.log.info(
+            "date_range_search_start",
+            council=self.council_name,
+            date_from=str(date_from), date_to=str(date_to),
+        )
+        try:
+            results = await self._search_keyword(
+                keyword="",
+                date_from=date_from,
+                date_to=date_to,
+                max_pages=max_pages,
             )
-            try:
-                results = await self._search_keyword(
-                    keyword=keyword,
-                    date_from=date_from,
-                    date_to=date_to,
-                    max_pages=max_pages,
-                )
-                for r in results:
-                    ref = r.get("reference", "")
-                    if ref and ref not in seen_refs:
-                        seen_refs.add(ref)
-                        all_results.append(r)
-            except Exception as exc:
-                self.metrics.record_error(
-                    exc, context=f"keyword_search:{keyword}"
-                )
-                self.log.warning(
-                    "keyword_search_failed",
-                    keyword=keyword,
-                    error=str(exc),
-                )
+            for r in results:
+                ref = r.get("reference", "")
+                if ref and ref not in seen_refs:
+                    seen_refs.add(ref)
+                    all_results.append(r)
+            self.log.info(
+                "date_range_search_done",
+                council=self.council_name,
+                results=len(results),
+            )
+        except Exception as exc:
+            self.metrics.record_error(exc, context="date_range_search")
+            self.log.warning(
+                "date_range_search_failed",
+                council=self.council_name,
+                error=str(exc)[:200],
+            )
+
+        # ---- Pass 2: keyword fallback (only if date-range was thin) ----
+        if len(all_results) < date_range_threshold:
+            self.log.info(
+                "keyword_fallback_engaged",
+                council=self.council_name,
+                date_range_results=len(all_results),
+            )
+            for keyword in keywords:
+                self.log.info("keyword_search", keyword=keyword, council=self.council_name)
+                try:
+                    results = await self._search_keyword(
+                        keyword=keyword,
+                        date_from=date_from,
+                        date_to=date_to,
+                        max_pages=max_pages,
+                    )
+                    for r in results:
+                        ref = r.get("reference", "")
+                        if ref and ref not in seen_refs:
+                            seen_refs.add(ref)
+                            all_results.append(r)
+                except Exception as exc:
+                    self.metrics.record_error(exc, context=f"keyword_search:{keyword}")
+                    self.log.warning(
+                        "keyword_search_failed",
+                        keyword=keyword,
+                        error=str(exc)[:200],
+                    )
 
         self.metrics.applications_found = len(all_results)
         return all_results

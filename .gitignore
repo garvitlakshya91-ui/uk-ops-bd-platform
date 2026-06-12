@@ -85,3 +85,21 @@ celerybeat-schedule*
 # Playwright
 playwright-report/
 test-results/
+
+# Scraped data artifacts — backed up separately via pg_dump + data zips
+backend/data/sturents/
+backend/data/afs/
+backend/data/operator_directories/
+backend/data/university_halls/
+backend/data/ownership_pilot.json
+backend/data/ownership_full_run.log
+backend/*.html
+deck/bd_intelligence_platform.pdf
+deck/slide-*.jpg
+deck/worc_halls.pdf
+deck/worc_*.html
+.claude/worktrees/
+backups/
+backend/afs_sitemap.xml
+backend/sturents_searchjs.js
+*.tsbuildinfo

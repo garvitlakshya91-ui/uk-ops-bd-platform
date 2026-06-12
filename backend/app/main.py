@@ -16,6 +16,7 @@ from app.api.dashboard import router as dashboard_router
 from app.api.alerts import router as alerts_router
 from app.api.scrapers import router as scrapers_router
 from app.api.frontend_adapters import router as frontend_adapters_router
+from app.api.arrears import router as arrears_router
 from app.api.auth import router as auth_router
 from app.api.users import router as users_router
 from app.api.ai_enrichment import router as ai_enrichment_router
@@ -77,6 +78,7 @@ app.include_router(dashboard_router)
 app.include_router(alerts_router)
 app.include_router(scrapers_router)
 app.include_router(frontend_adapters_router)
+app.include_router(arrears_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(ai_enrichment_router)

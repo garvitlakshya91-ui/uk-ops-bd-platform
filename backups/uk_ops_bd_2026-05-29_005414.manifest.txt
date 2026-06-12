@@ -1,0 +1,46 @@
+UK Ops BD Platform — Database backup manifest
+================================================
+
+Backup taken:  2026-05-28 23:54:17 UTC (2026-05-29 00:54 local)
+Source DB:     uk_ops_bd
+Postgres:      18.0
+Source size:   781 MB on disk
+
+Files
+-----
+  uk_ops_bd_2026-05-29_005414.dump         91 MB   pg_dump custom format -Fc -Z 6
+  uk_ops_bd_2026-05-29_005414.schema.sql   43 KB   schema-only SQL (--schema-only)
+  uk_ops_bd_2026-05-29_005414.manifest.txt         this file
+
+Restore
+-------
+  # Full restore into a fresh database
+  createdb -U postgres uk_ops_bd_restored
+  pg_restore -h localhost -U postgres -d uk_ops_bd_restored \
+             --no-owner --no-privileges --jobs=4 \
+             uk_ops_bd_2026-05-29_005414.dump
+
+  # Or, restore into the same DB (DROPS and recreates schema)
+  pg_restore -h localhost -U postgres -d uk_ops_bd \
+             --clean --if-exists --no-owner \
+             uk_ops_bd_2026-05-29_005414.dump
+
+Row counts at time of backup
+----------------------------
+  planning_applications     1,350,758
+  existing_schemes             82,582
+    of which BTR/PBSA:         32,290
+    scored (bd_score):         32,285
+  scheme_rents                  1,356
+  brownfield_sites             27,592 (approx)
+  companies                    varies
+  councils                     ~ 417
+  scraper_runs                 varies
+
+Notable state captured
+----------------------
+  - 32,285 schemes with bd_score + bd_score_breakdown populated
+  - 26,734 planning_applications with bd_score populated
+  - 8,959 schemes with arrears_risk_score
+  - 161 schemes with contract_end_date
+  - 699+ rent records across Unite Students (642), Chapter (16), iQ (5), Rightmove (36)

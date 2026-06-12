@@ -57,6 +57,33 @@ SCHEME_KEYWORDS: dict[str, list[str]] = {
         "purpose built rental",
         "rental scheme",
         "private rent",
+        # Broadened — common phrasings in BTR planning apps that don't use
+        # explicit "BTR" labelling
+        "rented apartments",
+        "rented homes",
+        "for rent",
+        "managed rental",
+        "single-ownership rental",
+        "single ownership rental",
+        "professionally managed rental",
+        "long-term rental",
+        "long term rental",
+        "purpose-built rental",
+        "private rental sector",
+        # ---- High-signal phrases added 2026-06-01 ----
+        # These are very rarely used outside BTR contexts:
+        "build for rent",                  # rare construction in non-BTR apps
+        "build-for-rent",
+        "operational residential",         # operator-managed residential
+        "rental tenure",                   # tenure-explicit
+        "rental housing tenure",
+        "professionally-managed",          # often paired with BTR
+        "co-living and build-to-rent",     # combined product
+        "private rental homes",            # tenure explicit
+        "private rented homes",
+        "long-term lease rental",
+        "single-family rental",            # SFR
+        "single family rental",
     ],
     "PBSA": [
         "student",
@@ -103,10 +130,105 @@ SCHEME_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
-# Regex patterns for extracting unit counts from descriptions
+# Known UK BTR developers, operators, and investment managers. Lowercased,
+# substring-matched against applicant_name and agent_name. If a planning
+# application's applicant is one of these, it's almost certainly BTR even
+# when the description doesn't use the words "build to rent".
+BTR_APPLICANT_KEYWORDS: list[str] = [
+    # Pure-play BTR operators / developers
+    "greystar", "quintain", "get living", "moda", "apo group", "apache capital",
+    "realstar", "way of life", "fizzy living", "essential living", "grainger",
+    "platform", "cortland", "native living", "native group", "lifestory",
+    "ridgeback", "delancey", "ddr", "yoo capital",
+    # Institutional / fund managers active in BTR
+    "m&g real estate", "m&g investments", "legal & general affordable",
+    "legal and general affordable", "l&g affordable", "l&g modular",
+    "aviva investors", "patrizia", "pgim real estate", "invesco real estate",
+    "lasalle investment", "schroders capital", "gcp", "gcp infrastructure",
+    "round hill capital", "long harbour", "tristan capital",
+    # Major mixed-use developers with significant BTR pipelines
+    "berkeley group", "berkeley homes", "lendlease", "british land",
+    "land securities", "landsec", "regal london", "regal homes",
+    "ballymore", "telford homes", "vistry partnerships", "muse developments",
+    "argent related", "argent llp", "u+i", "urban&civic",
+    # Affordable BTR / shared ownership specialists relevant to the BD pipeline
+    "sage housing", "blackstone real estate", "sigma capital", "thriving",
+    "sage homes",
+    # Other recurring BTR names
+    "henley investments", "wise living", "uncle", "the collective",
+    "vita group", "vita living", "fjm",
+    # ---- Birmingham + UK regional BTR developers (added 2026-06-01) ----
+    # Birmingham central — these were missing and caused 0 BTR classifications
+    "arena central",                # Arena Central Developments LLP — 30-storey towers
+    "court collaboration",          # Court Collaboration — Birmingham high-rise BTR
+    "calthorpe estates",            # Calthorpe Estates — Edgbaston BTR
+    "goodstone living",             # Goodstone Living — Birmingham/regional BTR
+    "apsley house capital",         # Apsley House Capital — Birmingham BTR
+    "mclaren property",             # McLaren Property — Birmingham/London BTR
+    "glenbrook",                    # Glenbrook — Manchester/Birmingham BTR
+    "packaged living",              # Packaged Living — UK regional BTR
+    "jrl group",                    # JRL Group — Birmingham mixed-use + BTR
+    "stanhope",                     # Stanhope — major UK developer with BTR
+    "topland",                      # Topland Group — Manchester/Birmingham BTR
+    "mcaleer & rushe",              # McAleer & Rushe — Northern BTR
+    "olympian homes",               # Olympian Homes — regional BTR
+    "legacie developments",         # Legacie Developments — Liverpool BTR
+    "ridgemont living",             # Ridgemont Living — UK regional BTR
+    "modaplan",                     # Modaplan — smaller BTR specialist
+    "simple life",                  # Simple Life — suburban BTR
+    "placefirst",                   # Placefirst — North England BTR
+    "urbanbubble",                  # urbanbubble — BTR operator
+    "lloyds living",                # Lloyds Living — bank-owned BTR
+    "savills im",                   # Savills Investment Management — BTR funds
+    "allsop letting",               # Allsop — BTR letting
+    "downing living",               # Downing Living — BTR
+    "watkin jones",                 # Watkin Jones — BTR + PBSA
+    "collegiate ac",                # Collegiate — student/young pro BTR
+]
+
+# Known PBSA operators — substring-matched against applicant_name/agent_name.
+PBSA_APPLICANT_KEYWORDS: list[str] = [
+    "unite students", "unite group", "iq student", "iq accommodation",
+    "fresh student living", "vita student", "vita group", "scape living",
+    "scape student", "the student housing company", "study inn",
+    "host student", "host real estate", "downing students", "prime student living",
+    "crm students", "campus living villages", "global student accommodation",
+    "gsa", "blackstone bidco", "homes for students", "yugo",
+    "true student", "chapter living", "urbanest", "nido student",
+    "mansion student", "the student lodge", "fusion students",
+    "student castle", "x1 lettings", "watkin jones",
+]
+
+# Senior/care home operators
+SENIOR_APPLICANT_KEYWORDS: list[str] = [
+    "mccarthy stone", "churchill retirement", "audley group", "audley villages",
+    "inspired villages", "retirement villages group", "anchor hanover",
+    "barchester healthcare", "bupa care", "care uk", "hc-one",
+    "lifestory retirement", "auriens", "elysian residences",
+]
+
+
+# Regex patterns for extracting unit counts from descriptions.
+# Order matters — first match wins. Broader patterns last.
 UNIT_COUNT_PATTERNS: list[re.Pattern] = [
+    # "circa 523 residential" / "approximately 200 dwellings" / "around 50 homes"
     re.compile(
-        r"(\d[\d,]*)\s*(?:no\.?\s*)?(?:residential\s*)?(?:units|flats|apartments|dwellings|homes|rooms|bed\s*spaces|houses|bungalows|maisonettes)",
+        r"(?:circa|approximately|approx\.?|around|some|of\s+up\s+to)\s+(\d[\d,]*)\s+(?:residential|dwellings?|units?|homes?|apartments?|flats?|bedrooms?)",
+        re.IGNORECASE,
+    ),
+    # "maximum of 5 dwelling houses" / "minimum of 3 dwellings"
+    re.compile(
+        r"(?:maximum|minimum)\s+of\s+(\d[\d,]*)\s+(?:dwellings?|units?|homes?|apartments?|flats?|houses?|residential)",
+        re.IGNORECASE,
+    ),
+    # "6 no. two-bedroom residential apartments" or "50no. 2-storey dwellinghouses"
+    # — accept word OR number-prefixed word between count and noun
+    re.compile(
+        r"(\d[\d,]*)\s*(?:no\.?\s*)?(?:[a-z0-9][a-z0-9-]+\s+){0,3}(?:units|flats|apartments|dwellings?|dwellinghouses?|homes|rooms|bed\s*spaces|houses|bungalows|maisonettes|townhouses)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(\d[\d,]*)\s*(?:no\.?\s*)?(?:residential\s*)?(?:units|flats|apartments|dwellings?|dwellinghouses?|homes|rooms|bed\s*spaces|houses|bungalows|maisonettes|townhouses)",
         re.IGNORECASE,
     ),
     re.compile(
@@ -371,53 +493,74 @@ class BaseScraper(ABC):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def classify_scheme_type(description: str | None) -> str:
+    def classify_scheme_type(
+        description: str | None,
+        applicant_name: str | None = None,
+        agent_name: str | None = None,
+    ) -> str:
         """
         Classify a planning application into a scheme type by matching
-        keywords against the description text.  Returns the first matching
-        type string or 'Unknown'.
+        keywords against the description, applicant, and agent text.
+
+        Most BTR planning applications don't use the words "build to rent"
+        in the description — the BTR signal lives in the applicant's
+        identity (Greystar, Quintain, M&G, etc.). This classifier checks
+        applicant_name and agent_name against curated operator lists in
+        addition to scanning the description for SCHEME_KEYWORDS.
 
         Return values align with the PlanningApplication.scheme_type column:
         'BTR', 'PBSA', 'Co-living', 'Senior', 'Affordable', 'Mixed',
         'Residential', 'Unknown'.
         """
-        if not description:
-            return "Unknown"
+        applicant_text = " ".join(
+            t for t in (applicant_name, agent_name) if t
+        ).lower()
 
-        text = description.lower()
         matched_types: list[str] = []
 
-        for scheme_type, keywords in SCHEME_KEYWORDS.items():
-            for keyword in keywords:
-                if keyword in text:
-                    matched_types.append(scheme_type)
-                    break
+        # Applicant-based classification first — most reliable for BTR/PBSA
+        # since the description often omits the rental model.
+        if applicant_text:
+            if any(kw in applicant_text for kw in BTR_APPLICANT_KEYWORDS):
+                matched_types.append("BTR")
+            if any(kw in applicant_text for kw in PBSA_APPLICANT_KEYWORDS):
+                matched_types.append("PBSA")
+            if any(kw in applicant_text for kw in SENIOR_APPLICANT_KEYWORDS):
+                matched_types.append("Senior")
 
-        if len(matched_types) == 0:
+        # Description-based classification on top
+        if description:
+            text = description.lower()
+            for scheme_type, keywords in SCHEME_KEYWORDS.items():
+                if scheme_type in matched_types:
+                    continue
+                for keyword in keywords:
+                    if keyword in text:
+                        matched_types.append(scheme_type)
+                        break
+
+        if matched_types:
+            # Dedup while preserving order
+            seen: set[str] = set()
+            uniq = [t for t in matched_types if not (t in seen or seen.add(t))]
+            if len(uniq) == 1:
+                return uniq[0]
+            return "Mixed"
+
+        # Fallback: generic residential keywords in description
+        if description:
+            text = description.lower()
             residential_kw = [
-                "residential",
-                "dwellings",
-                "flats",
-                "apartments",
-                "housing",
-                "houses",
-                "bungalows",
-                "maisonettes",
-                "bedroom",
-                "bed ",
-                "new build",
-                "new dwelling",
-                "new homes",
-                "storey",
+                "residential", "dwellings", "flats", "apartments",
+                "housing", "houses", "bungalows", "maisonettes",
+                "bedroom", "bed ", "new build", "new dwelling",
+                "new homes", "storey",
             ]
             for kw in residential_kw:
                 if kw in text:
                     return "Residential"
-            return "Unknown"
-        elif len(matched_types) == 1:
-            return matched_types[0]
-        else:
-            return "Mixed"
+
+        return "Unknown"
 
     # ------------------------------------------------------------------
     # Unit count extraction

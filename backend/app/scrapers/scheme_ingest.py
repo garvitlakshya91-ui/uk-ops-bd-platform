@@ -1755,20 +1755,19 @@ def ingest_brownfield_sites(
     results: list[dict[str, Any]],
     db: Session,
 ) -> dict[str, int]:
-    """Persist brownfield development sites as PlanningApplication records.
+    """Persist brownfield-register sites into the ``brownfield_sites`` table.
 
-    The Brownfield Land Register is a high-value nationwide dataset with
-    38,000+ development sites including addresses, coordinates, dwelling
-    counts, and planning permission details.
-
-    Each site is upserted as a PlanningApplication so it appears in the
-    Applications table and can be cross-referenced to schemes and pipeline
-    opportunities.
+    The Brownfield Land Register is a statutory list of LA-flagged sites
+    suitable for residential development. They are NOT planning
+    applications — historically we stored them in ``planning_applications``
+    which conflated two different concepts and broke BD dashboards. They
+    now live in their own ``brownfield_sites`` table.
 
     Parameters
     ----------
     results : list[dict]
-        Parsed brownfield site dicts from :meth:`BrownfieldScraper.parse_application`.
+        Parsed brownfield site dicts from
+        :meth:`BrownfieldScraper.parse_application`.
     db : Session
         Active SQLAlchemy session.
 
@@ -1777,13 +1776,13 @@ def ingest_brownfield_sites(
     dict
         Counts of ``created``, ``updated``, ``skipped``.
     """
-    from app.models.models import Council, PlanningApplication
+    from sqlalchemy import text
+    from app.models.models import Council
 
     created = 0
     updated = 0
     skipped = 0
 
-    # Build council cache by organisation-entity for O(1) lookup.
     council_cache: dict[str, int] = {}
 
     for site in results:
@@ -1796,19 +1795,14 @@ def ingest_brownfield_sites(
         postcode = site.get("postcode", "")
         num_units = site.get("num_units")
 
-        # Skip sites with no useful location info
         if not address and not postcode:
             skipped += 1
             continue
 
-        # Deduplicate by reference
-        brownfield_ref = f"brownfield:{reference}"
-
-        # Resolve council first (needed for dedup check)
+        # Resolve council
         org_entity = site.get("organisation_entity", "")
         council_id = council_cache.get(org_entity)
         if org_entity and council_id is None:
-            # Match by organisation_entity column (numeric ID from Planning Data API)
             council = (
                 db.query(Council)
                 .filter(Council.organisation_entity == org_entity)
@@ -1816,57 +1810,49 @@ def ingest_brownfield_sites(
             )
             if council:
                 council_id = council.id
-            council_cache[org_entity] = council_id  # Cache even if None
+            council_cache[org_entity] = council_id
 
         if council_id is None:
             skipped += 1
             continue
 
-        # Check for existing record by (reference, council_id)
-        existing = (
-            db.query(PlanningApplication)
-            .filter(
-                PlanningApplication.reference == brownfield_ref,
-                PlanningApplication.council_id == council_id,
-            )
-            .first()
-        )
+        # Upsert into brownfield_sites
+        result = db.execute(
+            text("""
+                INSERT INTO brownfield_sites
+                    (reference, council_id, address, postcode, latitude,
+                     longitude, num_units, status, scheme_type, source,
+                     created_at, updated_at)
+                VALUES
+                    (:ref, :cid, :addr, :pc, :lat, :lon, :units,
+                     :status, :stype, 'brownfield-register', NOW(), NOW())
+                ON CONFLICT (reference, council_id) DO UPDATE SET
+                    num_units = COALESCE(brownfield_sites.num_units, EXCLUDED.num_units),
+                    postcode = COALESCE(NULLIF(brownfield_sites.postcode, ''), EXCLUDED.postcode),
+                    latitude = COALESCE(brownfield_sites.latitude, EXCLUDED.latitude),
+                    longitude = COALESCE(brownfield_sites.longitude, EXCLUDED.longitude),
+                    updated_at = NOW()
+                RETURNING (xmax = 0) AS inserted
+            """),
+            {
+                "ref": reference,
+                "cid": council_id,
+                "addr": address,
+                "pc": postcode,
+                "lat": site.get("latitude"),
+                "lon": site.get("longitude"),
+                "units": num_units,
+                "status": site.get("status", "Unknown"),
+                "stype": site.get("scheme_type", "Residential"),
+            },
+        ).fetchone()
 
-        if existing:
-            changed = False
-            if num_units and not existing.num_units:
-                existing.num_units = num_units
-                changed = True
-            if postcode and not existing.postcode:
-                existing.postcode = postcode
-                changed = True
-            if site.get("latitude") and not existing.latitude:
-                existing.latitude = site["latitude"]
-                existing.longitude = site.get("longitude")
-                changed = True
-            if changed:
-                updated += 1
-            continue
+        if result and result[0]:
+            created += 1
+        else:
+            updated += 1
 
-        app = PlanningApplication(
-            reference=brownfield_ref,
-            council_id=council_id,
-            address=address,
-            postcode=postcode,
-            latitude=site.get("latitude"),
-            longitude=site.get("longitude"),
-            application_type=site.get("application_type", "Brownfield"),
-            status=site.get("status", "Unknown"),
-            scheme_type=site.get("scheme_type", "Residential"),
-            num_units=num_units,
-            submission_date=site.get("submission_date"),
-            decision_date=site.get("decision_date"),
-        )
-        db.add(app)
-        created += 1
-
-        # Commit in batches of 500 to avoid huge transactions
-        if created % 500 == 0:
+        if (created + updated) % 500 == 0:
             db.commit()
 
     db.commit()

@@ -989,7 +989,10 @@ class NECScraper(BaseScraper):
         decision = kv.get("decision") or kv.get("decision type") or ""
 
         date_received = _parse_dt(
-            kv.get("date received") or kv.get("received") or kv.get("registered") or ""
+            kv.get("date received") or kv.get("received") or kv.get("registered") or
+            kv.get("application registered") or kv.get("application received") or
+            kv.get("application date") or kv.get("submitted") or
+            kv.get("date of application") or ""
         )
         date_validated = _parse_dt(
             kv.get("date validated") or kv.get("validated") or ""
@@ -1091,6 +1094,24 @@ class NECScraper(BaseScraper):
         description = raw.get("description", "")
         address = raw.get("address", "")
 
+        # NEC PlanningExplorer detail pages (e.g. Birmingham) often don't expose a
+        # "status" field on the primary tab — it's on a separate decision tab.
+        # Default to "Pending" when there's a submission date but no decision yet.
+        raw_status = raw.get("status", "")
+        normalised_status = self.normalise_status(raw_status)
+        if normalised_status == "Unknown":
+            if not raw.get("decision_date") and (
+                raw.get("submission_date") or raw.get("validated_date")
+            ):
+                normalised_status = "Pending"
+
+        # Re-use the broadened classifier (applicant/agent + description)
+        scheme_type = self.classify_scheme_type(
+            description,
+            applicant_name=raw.get("applicant_name", ""),
+            agent_name=raw.get("agent_name", ""),
+        )
+
         return {
             "reference": raw.get("reference", ""),
             "council_id": self.council_id,
@@ -1101,9 +1122,9 @@ class NECScraper(BaseScraper):
             "applicant_name": raw.get("applicant_name", ""),
             "agent_name": raw.get("agent_name", ""),
             "application_type": raw.get("application_type", ""),
-            "status": self.normalise_status(raw.get("status", "")),
+            "status": normalised_status,
             "decision": raw.get("decision", ""),
-            "scheme_type": self.classify_scheme_type(description),
+            "scheme_type": scheme_type,
             "total_units": self.extract_unit_count(description),
             "submitted_date": raw.get("submission_date"),
             "validated_date": raw.get("validated_date"),
@@ -1113,9 +1134,9 @@ class NECScraper(BaseScraper):
             "documents_url": raw.get("documents_url", ""),
             "portal_url": raw.get("detail_url", ""),
             "source": "nec_scraper",
-            "is_btr": self.classify_scheme_type(description) == "BTR",
-            "is_pbsa": self.classify_scheme_type(description) == "PBSA",
-            "is_affordable": self.classify_scheme_type(description) == "Affordable",
+            "is_btr": scheme_type == "BTR",
+            "is_pbsa": scheme_type == "PBSA",
+            "is_affordable": scheme_type == "Affordable",
             "raw_data": raw.get("raw_kv"),
         }
 

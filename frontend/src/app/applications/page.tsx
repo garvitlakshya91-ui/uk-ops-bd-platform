@@ -66,6 +66,12 @@ export default function ApplicationsPage() {
   const [councilFilter, setCouncilFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [bdActionable, setBdActionable] = useState(false);
+  const [btrEligible, setBtrEligible] = useState(false);
+  const [minUnits, setMinUnits] = useState<string>('');
+  const [submittedWithinDays, setSubmittedWithinDays] = useState<string>('');
+  const [hasApplicant, setHasApplicant] = useState<'any' | 'yes' | 'no'>('any');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showMap, setShowMap] = useState(false);
   const [page, setPage] = useState(0);
@@ -97,12 +103,18 @@ export default function ApplicationsPage() {
 
   useEffect(() => {
     setLoading(true);
-    const params: Record<string, string | number> = { limit: PAGE_SIZE, skip: page * PAGE_SIZE };
+    const params: Record<string, string | number | boolean> = { limit: PAGE_SIZE, skip: page * PAGE_SIZE };
     if (councilFilter) params.council = councilFilter;
     if (typeFilter) params.scheme_type = typeFilter;
     if (statusFilter) params.status = statusFilter;
     if (search) params.search = search;
     if (sortBy) { params.sort_by = sortBy; params.sort_dir = sortDir; }
+    if (bdActionable) params.bd_actionable = true;
+    if (btrEligible) params.btr_eligible = true;
+    if (minUnits) params.min_units = Number(minUnits);
+    if (submittedWithinDays) params.submitted_within_days = Number(submittedWithinDays);
+    if (hasApplicant === 'yes') params.has_applicant = true;
+    if (hasApplicant === 'no') params.has_applicant = false;
 
     api.get('/v2/applications', { params })
       .then(res => {
@@ -130,7 +142,8 @@ export default function ApplicationsPage() {
       .catch(() => {
         setLoading(false);
       });
-  }, [councilFilter, typeFilter, statusFilter, search, page, sortBy, sortDir]);
+  }, [councilFilter, typeFilter, statusFilter, search, page, sortBy, sortDir,
+      bdActionable, btrEligible, minUnits, submittedWithinDays, hasApplicant]);
 
   function getSimilarApplications(app: ApplicationRow): ApplicationRow[] {
     return applications
@@ -208,69 +221,176 @@ export default function ApplicationsPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <SearchInput
-          placeholder="Search by reference, address, postcode, applicant, council..."
-          onChange={setSearch}
-          className="w-80"
-        />
-        <Select
-          options={councilOptions.map((c) => ({ value: c, label: c }))}
-          value={councilFilter}
-          onChange={setCouncilFilter}
-          placeholder="All Councils"
-          className="w-56"
-        />
-        <Select
-          options={[
-            { value: 'BTR', label: 'BTR' },
-            { value: 'PBSA', label: 'PBSA' },
-            { value: 'Co-living', label: 'Co-living' },
-            { value: 'Senior', label: 'Senior Living' },
-            { value: 'Affordable', label: 'Affordable' },
-            { value: 'Mixed', label: 'Mixed Use' },
-            { value: 'Residential', label: 'Residential (50+)' },
-          ]}
-          value={typeFilter}
-          onChange={setTypeFilter}
-          placeholder="All Scheme Types"
-          className="w-44"
-        />
-        <Select
-          options={[
-            { value: 'Permissioned', label: 'Permissioned' },
-            { value: 'Approved', label: 'Approved' },
-            { value: 'Allocated', label: 'Allocated (No Permission)' },
-            { value: 'Pending Decision', label: 'Pending Decision' },
-            { value: 'Refused', label: 'Refused' },
-            { value: 'Withdrawn', label: 'Withdrawn' },
-          ]}
-          value={statusFilter}
-          onChange={setStatusFilter}
-          placeholder="All Statuses"
-          className="w-40"
-        />
-        <button
-          onClick={() => setShowMap(!showMap)}
-          className={cn(
-            'inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all border',
-            showMap
-              ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
-              : 'bg-slate-700/50 text-slate-300 border-slate-600 hover:bg-slate-700 hover:text-white'
-          )}
-        >
-          <MapIcon className="w-4 h-4" />
-          Map View
-        </button>
-        {(search || councilFilter || typeFilter || statusFilter) && (
+      <div className="space-y-3">
+        {/* Primary row */}
+        <div className="flex flex-wrap items-center gap-3">
+          <SearchInput
+            placeholder="Search by reference, address, postcode, applicant, council..."
+            onChange={setSearch}
+            className="w-80"
+          />
+          <Select
+            options={councilOptions.map((c) => ({ value: c, label: c }))}
+            value={councilFilter}
+            onChange={setCouncilFilter}
+            placeholder="All Councils"
+            className="w-56"
+          />
+          <Select
+            options={[
+              { value: 'BTR', label: 'BTR' },
+              { value: 'PBSA', label: 'PBSA' },
+              { value: 'Co-living', label: 'Co-living' },
+              { value: 'Senior', label: 'Senior Living' },
+              { value: 'Affordable', label: 'Affordable' },
+              { value: 'Mixed', label: 'Mixed Use' },
+              { value: 'Residential', label: 'Residential' },
+            ]}
+            value={typeFilter}
+            onChange={setTypeFilter}
+            placeholder="All Scheme Types"
+            className="w-44"
+          />
+          <Select
+            options={[
+              { value: 'Pending', label: 'Pending' },
+              { value: 'Pre-Application', label: 'Pre-Application' },
+              { value: 'Submitted', label: 'Submitted' },
+              { value: 'Permissioned', label: 'Permissioned' },
+              { value: 'Approved', label: 'Approved' },
+              { value: 'Allocated', label: 'Allocated (No Permission)' },
+              { value: 'Pending Decision', label: 'Pending Decision' },
+              { value: 'Refused', label: 'Refused' },
+              { value: 'Withdrawn', label: 'Withdrawn' },
+            ]}
+            value={statusFilter}
+            onChange={setStatusFilter}
+            placeholder="All Statuses"
+            className="w-44"
+          />
+
+          {/* BD-actionable toggle — the killer filter */}
           <button
-            onClick={() => { setSearch(''); setCouncilFilter(''); setTypeFilter(''); setStatusFilter(''); }}
-            className="text-xs text-slate-400 hover:text-white px-2 py-1"
+            onClick={() => setBdActionable(v => !v)}
+            className={cn(
+              'inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all',
+              bdActionable
+                ? 'bg-amber-500/15 border-amber-500/40 text-amber-300 shadow-[0_0_0_1px_rgba(245,158,11,0.2)]'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+            )}
+            title="Planning stage AND (units >= 20 OR BD scheme type). Excludes brownfield register entries."
           >
-            Clear filters
+            <span className={cn('w-2 h-2 rounded-full', bdActionable ? 'bg-amber-400' : 'bg-slate-500')} />
+            BD-actionable
           </button>
+
+          {/* BTR-eligible toggle — captures BTR-likely apps the scheme_type tag misses */}
+          <button
+            onClick={() => setBtrEligible(v => !v)}
+            className={cn(
+              'inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-all',
+              btrEligible
+                ? 'bg-purple-500/15 border-purple-500/40 text-purple-300 shadow-[0_0_0_1px_rgba(168,85,247,0.2)]'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+            )}
+            title="Includes explicit BTR + apps where description mentions BTR/PRS, applicant is a known BTR developer, or 100+ unit Residential/Mixed. Excludes Senior/Affordable/PBSA/Co-living."
+          >
+            <span className={cn('w-2 h-2 rounded-full', btrEligible ? 'bg-purple-400' : 'bg-slate-500')} />
+            BTR-eligible
+          </button>
+
+          <button
+            onClick={() => setShowAdvanced(v => !v)}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-all',
+              showAdvanced || (minUnits || submittedWithinDays || hasApplicant !== 'any')
+                ? 'bg-blue-500/15 border-blue-500/40 text-blue-300'
+                : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+            )}
+          >
+            More filters
+            {(minUnits || submittedWithinDays || hasApplicant !== 'any') && (
+              <span className="ml-0.5 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 text-[10px] font-semibold bg-blue-500 text-white rounded-full">
+                {[minUnits, submittedWithinDays, hasApplicant !== 'any'].filter(Boolean).length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setShowMap(!showMap)}
+            className={cn(
+              'inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all border',
+              showMap
+                ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+                : 'bg-slate-700/50 text-slate-300 border-slate-600 hover:bg-slate-700 hover:text-white'
+            )}
+          >
+            <MapIcon className="w-4 h-4" />
+            Map View
+          </button>
+
+          {(search || councilFilter || typeFilter || statusFilter || bdActionable || btrEligible || minUnits || submittedWithinDays || hasApplicant !== 'any') && (
+            <button
+              onClick={() => {
+                setSearch(''); setCouncilFilter(''); setTypeFilter('');
+                setStatusFilter(''); setBdActionable(false); setBtrEligible(false);
+                setMinUnits(''); setSubmittedWithinDays(''); setHasApplicant('any');
+              }}
+              className="text-xs text-slate-400 hover:text-white px-2 py-1"
+            >
+              Clear all
+            </button>
+          )}
+          <span className="ml-auto text-sm text-slate-500">
+            {total.toLocaleString()} applications
+          </span>
+        </div>
+
+        {/* Advanced filters reveal */}
+        {showAdvanced && (
+          <div className="flex flex-wrap items-end gap-3 px-3 py-3 bg-slate-800/50 border border-slate-700 rounded-lg">
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">Min units</label>
+              <input
+                type="number"
+                value={minUnits}
+                onChange={(e) => setMinUnits(e.target.value)}
+                min={0}
+                placeholder="e.g. 50"
+                className="w-32 bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">Submitted within</label>
+              <Select
+                options={[
+                  { value: '7', label: 'Last 7 days' },
+                  { value: '30', label: 'Last 30 days' },
+                  { value: '90', label: 'Last 90 days' },
+                  { value: '180', label: 'Last 6 months' },
+                  { value: '365', label: 'Last 12 months' },
+                ]}
+                value={submittedWithinDays}
+                onChange={setSubmittedWithinDays}
+                placeholder="Any time"
+                className="w-44"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">Applicant known?</label>
+              <Select
+                options={[
+                  { value: 'any', label: 'Any' },
+                  { value: 'yes', label: 'Yes — has applicant' },
+                  { value: 'no', label: 'No — anonymous' },
+                ]}
+                value={hasApplicant}
+                onChange={(v) => setHasApplicant(v as 'any' | 'yes' | 'no')}
+                className="w-44"
+              />
+            </div>
+          </div>
         )}
-        <span className="ml-auto text-sm text-slate-500">{filtered.length} applications</span>
       </div>
 
       {/* Map Placeholder */}

@@ -229,6 +229,19 @@ class PlanningApplication(Base):
     is_pbsa: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
     is_affordable: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
     bd_relevance_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Canonical BD score (populated by backfill_bd_scores.py via BDScorer).
+    bd_score: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, index=True,
+        comment="Cached composite BD score (0-100) from BDScorer.",
+    )
+    bd_score_breakdown: Mapped[Optional[dict]] = mapped_column(
+        JSONB, nullable=True,
+        comment="Cached per-dimension scores from BDScorer (for explainability).",
+    )
+    bd_score_updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+        comment="When bd_score was last refreshed.",
+    )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     raw_html: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     raw_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
@@ -316,6 +329,45 @@ class ExistingScheme(Base):
     )
     data_confidence_score: Mapped[Optional[float]] = mapped_column(
         Float, nullable=True, comment="0.0-1.0 confidence in data accuracy"
+    )
+    # BD-scoring inputs (populated by separate enrichment tasks).
+    google_rating: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="Google Places rating, 0.0-5.0",
+    )
+    google_review_count: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    google_place_id: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, comment="Google Place ID, for caching",
+    )
+    google_checked_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    occupancy_rate: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="0.0-1.0; fraction of units occupied",
+    )
+    occupancy_checked_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    arrears_risk_score: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True,
+        comment="0-100; higher = more financial distress signal "
+                "(late CH filings, recent charges, etc).",
+    )
+    arrears_checked_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    bd_score: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, index=True,
+        comment="Cached composite BD score (0-100) from BDScorer.",
+    )
+    bd_score_breakdown: Mapped[Optional[dict]] = mapped_column(
+        JSON, nullable=True,
+        comment="Cached per-dimension scores from BDScorer (for explainability).",
+    )
+    bd_score_updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+        comment="When bd_score was last refreshed.",
     )
     # HM Land Registry CCOD fields — populated by the HMLR CCOD ingest job.
     hmlr_title_number: Mapped[Optional[str]] = mapped_column(

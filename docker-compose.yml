@@ -61,6 +61,10 @@ services:
       - 8.8.8.8
       - 8.8.4.4
       - 1.1.1.1
+    extra_hosts:
+      - "postgres:host-gateway"
+      - "redis:host-gateway"
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./backend:/app
     restart: unless-stopped
@@ -79,6 +83,10 @@ services:
       - 8.8.8.8
       - 8.8.4.4
       - 1.1.1.1
+    extra_hosts:
+      - "postgres:host-gateway"
+      - "redis:host-gateway"
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./backend:/app
     restart: unless-stopped
@@ -91,6 +99,10 @@ services:
         condition: service_healthy
     env_file:
       - .env
+    extra_hosts:
+      - "postgres:host-gateway"
+      - "redis:host-gateway"
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./backend:/app
     restart: unless-stopped

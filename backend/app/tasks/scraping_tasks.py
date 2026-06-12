@@ -12,6 +12,7 @@ from typing import Any
 
 import structlog
 from celery import group
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
@@ -319,6 +320,13 @@ def scrape_all_councils() -> dict[str, Any]:
             scrape_council.s(council.id) for council in active_councils
         )
         result = task_group.apply_async()
+
+        # Schedule a council-id backfill ~30 min after dispatch so any newly
+        # ingested NULL-council schemes get resolved without waiting for the
+        # hourly beat tick. Uses Postcodes.io + creates missing council rows.
+        # Idempotent — does nothing when there's nothing to backfill.
+        from app.tasks.enrichment_tasks import backfill_scheme_council_ids
+        backfill_scheme_council_ids.apply_async(countdown=1800)
 
         logger.info(
             "scrape_all_councils_scheduled",
@@ -757,47 +765,75 @@ def run_scheme_data_quality_audit(self) -> dict[str, Any]:
 
     Queries ExistingScheme records to identify data quality issues and
     creates an Alert record summarising the findings.
+
+    Reports two cohorts:
+    - ``total_*``: across all schemes (includes individual EPC dwellings
+      and housing-association-owned stock that don't conceptually have
+      operating contracts — useful for raw data hygiene).
+    - ``bd_*``: scoped to the BD-addressable cohort of operating
+      schemes (BTR/PBSA/Co-living/Senior sourced from operator-listing
+      and tender feeds) — the right baseline for the "% missing"
+      dashboard metric.
     """
     db = _get_db()
     try:
         logger.info("scheme_data_quality_audit_started")
         from app.models.models import ExistingScheme, Alert
+        from sqlalchemy import and_, or_
 
         now = datetime.datetime.now(datetime.timezone.utc)
         ninety_days_ago = now - datetime.timedelta(days=90)
 
-        never_verified = (
-            db.query(ExistingScheme)
-            .filter(ExistingScheme.last_verified_at.is_(None))
-            .count()
+        # BD-addressable cohort: operating schemes that should have a
+        # third-party management contract with a real end date.
+        bd_cohort_filter = and_(
+            ExistingScheme.scheme_type.in_(
+                ["BTR", "PBSA", "Co-living", "Senior"]
+            ),
+            ExistingScheme.source.in_(
+                ["arl_btr_open_operating", "pbsa_operator", "find_a_tender"]
+            ),
         )
-        stale_90_days = (
-            db.query(ExistingScheme)
-            .filter(ExistingScheme.last_verified_at < ninety_days_ago)
-            .count()
+
+        def _count(*filters):
+            q = db.query(ExistingScheme)
+            for f in filters:
+                q = q.filter(f)
+            return q.count()
+
+        total_schemes = _count()
+        bd_total = _count(bd_cohort_filter)
+
+        never_verified = _count(ExistingScheme.last_verified_at.is_(None))
+        stale_90_days = _count(ExistingScheme.last_verified_at < ninety_days_ago)
+        missing_operator = _count(ExistingScheme.operator_company_id.is_(None))
+        missing_contract_end = _count(ExistingScheme.contract_end_date.is_(None))
+        low_confidence = _count(ExistingScheme.data_confidence_score < 0.5)
+
+        bd_missing_operator = _count(
+            bd_cohort_filter, ExistingScheme.operator_company_id.is_(None)
         )
-        missing_operator = (
-            db.query(ExistingScheme)
-            .filter(ExistingScheme.operator_company_id.is_(None))
-            .count()
+        bd_missing_contract_end = _count(
+            bd_cohort_filter, ExistingScheme.contract_end_date.is_(None)
         )
-        missing_contract_end = (
-            db.query(ExistingScheme)
-            .filter(ExistingScheme.contract_end_date.is_(None))
-            .count()
-        )
-        low_confidence = (
-            db.query(ExistingScheme)
-            .filter(ExistingScheme.data_confidence_score < 0.5)
-            .count()
+
+        bd_contract_end_fill_pct = (
+            round(100 * (bd_total - bd_missing_contract_end) / bd_total)
+            if bd_total
+            else 0
         )
 
         audit_results = {
+            "total_schemes": total_schemes,
             "never_verified": never_verified,
             "stale_90_days": stale_90_days,
             "missing_operator": missing_operator,
             "missing_contract_end": missing_contract_end,
             "low_confidence": low_confidence,
+            "bd_total": bd_total,
+            "bd_missing_operator": bd_missing_operator,
+            "bd_missing_contract_end": bd_missing_contract_end,
+            "bd_contract_end_fill_pct": bd_contract_end_fill_pct,
         }
 
         # Create an alert with the audit report
@@ -805,12 +841,14 @@ def run_scheme_data_quality_audit(self) -> dict[str, Any]:
             type="data_quality_report",
             title="Monthly Scheme Data Quality Audit",
             message=(
-                f"Audit results:\n"
-                f"- Never verified: {never_verified}\n"
-                f"- Stale (>90 days): {stale_90_days}\n"
-                f"- Missing operator: {missing_operator}\n"
-                f"- Missing contract end: {missing_contract_end}\n"
-                f"- Low confidence (<0.5): {low_confidence}"
+                f"Audit results (total / BD-addressable cohort):\n"
+                f"- Total schemes: {total_schemes:,} (BD-addressable: {bd_total:,})\n"
+                f"- Never verified: {never_verified:,}\n"
+                f"- Stale (>90 days): {stale_90_days:,}\n"
+                f"- Missing operator: {missing_operator:,} (BD: {bd_missing_operator:,})\n"
+                f"- Missing contract end: {missing_contract_end:,} (BD: {bd_missing_contract_end:,})\n"
+                f"- BD contract_end_date fill rate: {bd_contract_end_fill_pct}%\n"
+                f"- Low confidence (<0.5): {low_confidence:,}"
             ),
             entity_type="scheme_audit",
             is_read=False,
@@ -911,46 +949,83 @@ def refresh_scheme_data(self, scheme_id: int) -> dict[str, Any]:
 )
 def ingest_planit_applications(
     self,
-    days_back: int = 30,
+    days_back: int = 14,
     start_date: str | None = None,
     end_date: str | None = None,
+    max_records: int = 10000,
+    page_size: int = 200,
+    states: tuple[str, ...] = ("Undecided", "Permitted"),
 ) -> dict[str, Any]:
-    """Ingest planning applications from the PlanIt API (planit.org.uk).
+    """Ingest fresh planning applications from the PlanIt API (planit.org.uk).
 
-    Fetches residential/BTR-relevant applications and all major applications
-    from the PlanIt aggregator, which covers 417 UK local authorities and
-    20M+ total applications.
+    Strategy (designed to finish in <10 min daily without exhausting the
+    PlanIt rate budget):
 
-    Results are matched to existing councils by authority name and upserted
-    into the planning_applications table.
+    1. **Flat fetch — no keyword fan-out.** The PlanIt ``q`` filter doesn't
+       actually narrow results, so iterating over 10 keywords × weekly date
+       chunks just multiplies the request count without adding signal.
+    2. **State filter at API level.** Only fetch Undecided + Permitted —
+       these are the BD-relevant lifecycle stages. Refused/Withdrawn don't
+       feed the pipeline.
+    3. **Incremental commits.** Every ``page_size`` records, commit to DB.
+       Even if rate-limit eventually kills the run, you keep what you got.
+    4. **App-type filter at ingest.** Skip clearly non-BD types (tree work,
+       condition discharges, telecoms, listed-building consent, etc.).
+    5. **Use the broadened classifier** that matches BTR developer names
+       against ``applicant_name`` / ``agent_name``.
 
     Parameters
     ----------
     days_back : int
-        Number of days to look back from today (default 30).  Ignored if
-        start_date/end_date are provided.
-    start_date : str | None
-        ISO-format start date (e.g. "2025-03-01").  Overrides days_back.
-    end_date : str | None
-        ISO-format end date (e.g. "2025-03-31").  Overrides days_back.
-
-    Returns
-    -------
-    dict
-        Summary with counts of applications fetched, new, updated, skipped.
+        Lookback window (default 14). PlanIt produces ~700 applications per
+        day across 417 LPAs, so 14 days ~= 10k records — manageable.
+    max_records : int
+        Hard cap to avoid runaway runs. Default 10k.
+    page_size : int
+        Rows per API request and commit batch (default 200).
+    states : tuple[str, ...]
+        PlanIt app_state values to ingest. Default ("Undecided", "Permitted").
     """
-    from datetime import date as date_type
+    import time
+    import json
+    import httpx
+    from datetime import date as date_type, datetime as dt, timezone as tz
+
+    PLANIT_BASE = "https://www.planit.org.uk/api/applics/json"
+    # PlanIt app_type values that are bureaucratic noise from a BD perspective.
+    SKIP_APP_TYPES = {
+        "trees", "tree work", "tree preservation",
+        "conditions", "discharge condition", "discharge of conditions",
+        "discharge of multiple conditions", "non material amendment",
+        "non-material amendment", "details reserved by condition",
+        "approval of detail", "approval of details",
+        "telecoms", "advertis", "listed building consent",
+        "listed building", "lawful development", "prior approval",
+        "section 106", "s106", "tpo",
+    }
 
     db = _get_db()
     try:
+        # Resolve date range
+        if start_date:
+            d_start = date_type.fromisoformat(start_date)
+        else:
+            d_start = date_type.today() - datetime.timedelta(days=days_back)
+        if end_date:
+            d_end = date_type.fromisoformat(end_date)
+        else:
+            d_end = date_type.today()
+
         logger.info(
             "ingest_planit_started",
-            days_back=days_back,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=d_start.isoformat(),
+            end_date=d_end.isoformat(),
+            states=list(states),
+            max_records=max_records,
         )
 
-        # Record the scraper run
+        # Note: scraper_runs has a ``source`` column in DB but the ORM model
+        # doesn't expose it (schema drift). We set it via raw SQL after insert.
         run = ScraperRun(
             council_id=None,
             status="running",
@@ -959,78 +1034,161 @@ def ingest_planit_applications(
             applications_updated=0,
             errors_count=0,
         )
-        if hasattr(ScraperRun, "scraper_name"):
-            run.scraper_name = "planit_api"
         db.add(run)
         db.commit()
+        # Tag source via raw SQL (column exists in DB but not on the ORM model)
+        db.execute(
+            text("UPDATE scraper_runs SET source = 'planit_api' WHERE id = :id"),
+            {"id": run.id},
+        )
+        db.commit()
 
+        # Council lookup
+        council_lookup: dict[str, int] = {
+            c.name.lower().strip(): c.id for c in db.query(Council).all()
+        }
+
+        # Run one fetch per state (Undecided, Permitted) flat over the date range.
+        from app.scrapers.base import BaseScraper
+
+        found = 0
+        new = 0
+        updated = 0
+        skipped_noise = 0
+        skipped_no_council = 0
+        skipped_existing = 0
+        errors = 0
+        consecutive_429s = 0
+
+        # Wire PROXY_URL through — when set, every PlanIt request goes via the proxy.
+        # Rotating proxies (Smartproxy / Bright Data) effectively give us more rate
+        # budget by spreading requests across multiple IPs.
+        client_kwargs: dict[str, Any] = {
+            "timeout": 60.0,
+            "headers": {"User-Agent": "ukops-bd-platform/1.0"},
+        }
+        from app.config import settings as _settings
+        if getattr(_settings, "PROXY_URL", None):
+            client_kwargs["proxy"] = _settings.PROXY_URL
+            logger.info("planit_using_proxy", proxy_redacted=_settings.PROXY_URL.split("@")[-1])
+        with httpx.Client(**client_kwargs) as client:
+            for state in states:
+                page = 1
+                while found < max_records:
+                    params = {
+                        "start_date": d_start.isoformat(),
+                        "end_date": d_end.isoformat(),
+                        "pg_sz": page_size,
+                        "page": page,
+                    }
+                    # Allow callers to opt out of the app_state filter entirely
+                    # (e.g. Birmingham's PlanIt records have app_state=None and
+                    # are otherwise silently excluded). Use the literal "all"
+                    # or None in the ``states`` tuple to fetch without filter.
+                    if state is not None and state != "all":
+                        params["app_state"] = state
+                    try:
+                        r = client.get(PLANIT_BASE, params=params)
+                    except Exception as exc:
+                        logger.warning("planit_fetch_error", page=page, error=str(exc)[:120])
+                        errors += 1
+                        time.sleep(5)
+                        continue
+
+                    if r.status_code == 429:
+                        consecutive_429s += 1
+                        retry = int(r.headers.get("Retry-After", "60"))
+                        if consecutive_429s >= 3:
+                            logger.warning("planit_rate_limited_giving_up", retry=retry)
+                            break
+                        logger.info("planit_rate_limited_waiting", retry=retry)
+                        time.sleep(min(retry, 90))
+                        continue
+                    consecutive_429s = 0
+
+                    if r.status_code != 200:
+                        logger.warning("planit_http_error", status=r.status_code, body=r.text[:200])
+                        errors += 1
+                        break
+
+                    data = r.json()
+                    records = data.get("records", []) or []
+                    if not records:
+                        break
+
+                    for rec in records:
+                        found += 1
+                        if found > max_records:
+                            break
+                        try:
+                            res = _save_planit_record_v2(
+                                db, rec, council_lookup, SKIP_APP_TYPES, BaseScraper
+                            )
+                        except Exception as exc:
+                            errors += 1
+                            logger.debug("planit_save_error", error=str(exc)[:200])
+                            continue
+                        if res == "new":
+                            new += 1
+                        elif res == "existing":
+                            skipped_existing += 1
+                        elif res == "noise":
+                            skipped_noise += 1
+                        elif res == "no_council":
+                            skipped_no_council += 1
+
+                    # Commit at end of every page.
+                    db.commit()
+                    logger.info(
+                        "planit_page_committed",
+                        state=state, page=page, found=found, new=new,
+                        skipped_noise=skipped_noise,
+                        skipped_existing=skipped_existing,
+                    )
+                    page += 1
+                    time.sleep(0.6)  # respect 1-2 req/s soft cap
+
+                if found >= max_records:
+                    break
+
+        run.applications_found = found
+        run.applications_new = new
+        run.applications_updated = updated
+        run.errors_count = errors
+        run.status = "success" if errors == 0 else "partial"
+        run.completed_at = datetime.datetime.now(datetime.timezone.utc)
+        db.commit()
+
+        logger.info(
+            "ingest_planit_completed",
+            found=found, new=new, updated=updated,
+            skipped_noise=skipped_noise,
+            skipped_existing=skipped_existing,
+            skipped_no_council=skipped_no_council,
+            errors=errors,
+        )
+
+        return {
+            "status": run.status,
+            "found": found,
+            "new": new,
+            "updated": updated,
+            "skipped_noise": skipped_noise,
+            "skipped_existing": skipped_existing,
+            "skipped_no_council": skipped_no_council,
+            "errors": errors,
+        }
+
+    except Exception as exc:
+        logger.exception("ingest_planit_failed")
         try:
-            from app.scrapers.planit_scraper import PlanItScraper
-
-            # Parse explicit date range if provided
-            parsed_start = None
-            parsed_end = None
-            if start_date:
-                parsed_start = date_type.fromisoformat(start_date)
-            if end_date:
-                parsed_end = date_type.fromisoformat(end_date)
-
-            scraper = PlanItScraper(
-                days_back=days_back,
-                start_date=parsed_start,
-                end_date=parsed_end,
-            )
-
-            # Run the scraper
-            raw_results = _run_async(_run_scraper(scraper))
-
-            logger.info(
-                "ingest_planit_fetched",
-                total_records=len(raw_results),
-            )
-
-            # Build a council name -> council_id lookup (case-insensitive)
-            all_councils = db.query(Council).all()
-            council_lookup: dict[str, int] = {}
-            for c in all_councils:
-                council_lookup[c.name.lower().strip()] = c.id
-
-            # Save results
-            stats = _save_planit_applications(db, raw_results, council_lookup)
-
-            run.applications_found = stats["found"]
-            run.applications_new = stats["new"]
-            run.applications_updated = stats["updated"]
-            run.errors_count = stats["errors"]
-            run.status = "success" if stats["errors"] == 0 else "partial"
-            run.completed_at = datetime.datetime.now(datetime.timezone.utc)
-            db.commit()
-
-            logger.info(
-                "ingest_planit_completed",
-                found=stats["found"],
-                new=stats["new"],
-                updated=stats["updated"],
-                skipped=stats["skipped"],
-                matched_councils=stats["matched_councils"],
-                unmatched_councils=stats["unmatched_councils"],
-                errors=stats["errors"],
-            )
-
-            return {
-                "status": run.status,
-                **stats,
-            }
-
-        except Exception as exc:
             run.status = "failed"
             run.completed_at = datetime.datetime.now(datetime.timezone.utc)
             run.error_details = {"exception": str(exc)}
             db.commit()
-
-            logger.exception("ingest_planit_failed")
-            raise self.retry(exc=exc)
-
+        except Exception:
+            pass
+        raise self.retry(exc=exc)
     finally:
         db.close()
 
@@ -1122,6 +1280,109 @@ def _resolve_council_id(
 
     _cache[authority_name] = None
     return None
+
+
+def _save_planit_record_v2(
+    db: "Session",
+    rec: dict[str, Any],
+    council_lookup: dict[str, int],
+    skip_app_types: set[str],
+    classifier_cls,
+) -> str:
+    """Save one PlanIt record. Returns 'new' | 'existing' | 'no_council' | 'noise' | 'error'.
+
+    Used by the rewritten ``ingest_planit_applications`` task — does its own
+    insert via raw SQL for speed and to avoid the model-instantiation overhead
+    of the legacy path.
+    """
+    uid = (rec.get("uid") or "").strip()
+    area = (rec.get("area_name") or "").strip()
+    if not uid or not area:
+        return "error"
+
+    council_id = council_lookup.get(area.lower().strip())
+    if not council_id:
+        return "no_council"
+
+    # Drop noise application types early
+    app_type_raw = (rec.get("app_type") or "").lower().strip()
+    if any(noise in app_type_raw for noise in skip_app_types):
+        return "noise"
+
+    # Deduplicate by (reference, council_id)
+    existing = db.execute(
+        text("SELECT 1 FROM planning_applications WHERE reference = :r AND council_id = :c"),
+        {"r": uid, "c": council_id},
+    ).fetchone()
+    if existing:
+        return "existing"
+
+    # Field mapping
+    description = rec.get("description") or ""
+    applicant_name = rec.get("applicant_name") or ""
+    agent_name = rec.get("agent_name") or ""
+    address = rec.get("address") or ""
+
+    # Status mapping
+    status_map = {
+        "Undecided": "Pending", "Permitted": "Approved", "Conditions": "Approved",
+        "Refused": "Refused", "Withdrawn": "Withdrawn", "Appeal": "Appeal",
+        "Referred": "Pending", "Other": "Unknown", "Not Available": "Unknown",
+    }
+    status = status_map.get(rec.get("app_state", ""), "Unknown")
+
+    # Submission date
+    submission_date = None
+    raw_sd = rec.get("start_date") or rec.get("consulted_date")
+    if raw_sd:
+        try:
+            submission_date = datetime.date.fromisoformat(str(raw_sd)[:10])
+        except (ValueError, TypeError):
+            pass
+
+    # Coordinates
+    lat, lon = None, None
+    loc = rec.get("location") or {}
+    coords = loc.get("coordinates") if isinstance(loc, dict) else None
+    if coords and len(coords) == 2:
+        try:
+            lon, lat = float(coords[0]), float(coords[1])
+        except (TypeError, ValueError):
+            pass
+
+    # Classify via broadened classifier (applicant_name + description)
+    scheme_type = classifier_cls.classify_scheme_type(
+        description, applicant_name=applicant_name, agent_name=agent_name
+    )
+    num_units = classifier_cls.extract_unit_count(description)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    import json as _json
+    db.execute(
+        text("""
+            INSERT INTO planning_applications
+                (reference, council_id, address, description, applicant_name,
+                 agent_name, application_type, status, scheme_type, num_units,
+                 latitude, longitude, submission_date, source, raw_data,
+                 created_at, updated_at)
+            VALUES
+                (:ref, :cid, :addr, :desc, :app, :agent, :atype, :status,
+                 :stype, :units, :lat, :lon, :sdate, 'planit_api',
+                 CAST(:raw AS jsonb), :now, :now)
+        """),
+        {
+            "ref": uid, "cid": council_id,
+            "addr": address, "desc": description,
+            "app": applicant_name or None,
+            "agent": agent_name or None,
+            "atype": rec.get("app_type"),
+            "status": status, "stype": scheme_type, "units": num_units,
+            "lat": lat, "lon": lon, "sdate": submission_date,
+            "raw": _json.dumps(rec, default=str),
+            "now": now,
+        },
+    )
+    return "new"
 
 
 def _save_planit_applications(
@@ -1320,13 +1581,19 @@ def _load_scraper(scraper_class_name: str | None, council: Council | None) -> An
 
     portal = scraper_class_name.lower()
 
-    # Map portal types to module paths.
+    # Map portal types (and legacy class-name aliases) to module paths.
     scraper_map: dict[str, str] = {
+        # Council.portal_type values
         "idox": "app.scrapers.idox_scraper.IdoxScraper",
         "civica": "app.scrapers.civica_scraper.CivicaScraper",
         "nec": "app.scrapers.nec_scraper.NECScraper",
+        "api": "app.scrapers.planning_data_api.PlanningDataAPIScraper",
         "planning_data_api": "app.scrapers.planning_data_api.PlanningDataAPIScraper",
         "find_a_tender": "app.scrapers.find_a_tender.FindATenderScraper",
+        # Council.scraper_class legacy values (set by seed_councils)
+        "idoxscraper": "app.scrapers.idox_scraper.IdoxScraper",
+        "civicascraper": "app.scrapers.civica_scraper.CivicaScraper",
+        "necscraper": "app.scrapers.nec_scraper.NECScraper",
     }
 
     module_path = scraper_map.get(portal, scraper_class_name)
@@ -1339,9 +1606,19 @@ def _load_scraper(scraper_class_name: str | None, council: Council | None) -> An
     mod = importlib.import_module(parts[0])
     cls = getattr(mod, parts[1])
 
-    # For web-portal scrapers, build a typed config object.
-    if portal in ("idox", "nec", "civica"):
-        config = _build_scraper_config(portal, council)
+    # For web-portal scrapers, build a typed config object. Match by either
+    # portal_type ("idox") or the legacy class-name alias ("idoxscraper")
+    # — Council.scraper_class is set by seed_councils() to the latter.
+    portal_kind = None
+    if portal in ("idox", "idoxscraper"):
+        portal_kind = "idox"
+    elif portal in ("nec", "necscraper"):
+        portal_kind = "nec"
+    elif portal in ("civica", "civicascraper"):
+        portal_kind = "civica"
+
+    if portal_kind:
+        config = _build_scraper_config(portal_kind, council)
         return cls(config=config)
 
     # For API-based scrapers, pass council directly if accepted.

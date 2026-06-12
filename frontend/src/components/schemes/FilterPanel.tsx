@@ -24,6 +24,7 @@ export interface SchemeFilters {
   max_rent: string;
   operator_ids: number[];
   contract_end_within_days: string;
+  min_arrears: string;  // schemes with arrears_risk_score >= this
 }
 
 export const DEFAULT_FILTERS: SchemeFilters = {
@@ -41,6 +42,7 @@ export const DEFAULT_FILTERS: SchemeFilters = {
   max_rent: '',
   operator_ids: [],
   contract_end_within_days: '',
+  min_arrears: '',
 };
 
 export function countActiveFilters(f: SchemeFilters): number {
@@ -59,6 +61,7 @@ export function countActiveFilters(f: SchemeFilters): number {
   if (f.max_rent) n++;
   if (f.operator_ids.length) n++;
   if (f.contract_end_within_days) n++;
+  if (f.min_arrears) n++;
   return n;
 }
 

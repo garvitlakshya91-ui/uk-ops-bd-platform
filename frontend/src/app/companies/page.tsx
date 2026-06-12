@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { ChevronDownIcon, ChevronUpIcon, ExclamationTriangleIcon, ClipboardDocumentIcon, EnvelopeIcon, PhoneIcon } from '@heroicons/react/24/outline';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { ChevronDownIcon, ChevronUpIcon, ExclamationTriangleIcon, ClipboardDocumentIcon, EnvelopeIcon, PhoneIcon, FireIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
 import { cn, formatDate, getSchemeTypeColor } from '@/lib/utils';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
@@ -10,6 +12,275 @@ import Modal from '@/components/ui/Modal';
 import PermissionGate from '@/components/rbac/PermissionGate';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
+
+// ---------------------------------------------------------------------------
+// Arrears / Distress types matching /api/v2/arrears/company/{id}
+// ---------------------------------------------------------------------------
+
+type ArrearsBucket = 'healthy' | 'caution' | 'distressed' | 'critical';
+
+interface ArrearsSchemeRow {
+  scheme_id: number;
+  name: string;
+  scheme_type?: string | null;
+  units?: number | null;
+  arrears_score: number;
+  bucket: ArrearsBucket;
+  top_signal?: string | null;
+  bd_score?: number | null;
+  contract_end_date?: string | null;
+}
+
+interface ArrearsCompanyResponse {
+  company_id: number;
+  company_name: string;
+  ch_number?: string | null;
+  scheme_count: number;
+  scored_count: number;
+  avg_arrears: number;
+  max_arrears: number;
+  bucket_counts: { healthy: number; caution: number; distressed: number; critical: number };
+  schemes: ArrearsSchemeRow[];
+}
+
+const BUCKET_META: Record<ArrearsBucket, { label: string; chip: string; bar: string; text: string }> = {
+  healthy: {
+    label: 'Healthy',
+    chip: 'bg-slate-700/50 text-slate-300 border-slate-600',
+    bar: 'bg-slate-500',
+    text: 'text-slate-300',
+  },
+  caution: {
+    label: 'Caution',
+    chip: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+    bar: 'bg-amber-500',
+    text: 'text-amber-300',
+  },
+  distressed: {
+    label: 'Distressed',
+    chip: 'bg-orange-500/20 text-orange-300 border-orange-500/40',
+    bar: 'bg-orange-500',
+    text: 'text-orange-300',
+  },
+  critical: {
+    label: 'Critical',
+    chip: 'bg-red-500/20 text-red-300 border-red-500/40',
+    bar: 'bg-red-500',
+    text: 'text-red-300',
+  },
+};
+
+function scoreToBucket(score: number): ArrearsBucket {
+  if (score >= 80) return 'critical';
+  if (score >= 60) return 'distressed';
+  if (score >= 35) return 'caution';
+  return 'healthy';
+}
+
+function ArrearsChip({ score, bucket }: { score: number; bucket: ArrearsBucket }) {
+  const meta = BUCKET_META[bucket];
+  return (
+    <span className={cn('inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold border', meta.chip)}>
+      {bucket === 'critical' && <FireIcon className="w-3 h-3" />}
+      {score.toFixed(0)}
+    </span>
+  );
+}
+
+function DistressSignalsCard({ companyId }: { companyId: string }) {
+  const [data, setData] = useState<ArrearsCompanyResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    api
+      .get(`/v2/arrears/company/${companyId}`)
+      .then((res) => {
+        if (!cancelled) setData(res.data);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err?.response?.data?.detail || 'Failed to load distress signals');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId]);
+
+  if (loading) {
+    return (
+      <div className="bg-slate-700/30 border border-slate-600/20 rounded-lg p-4 animate-pulse">
+        <div className="h-4 bg-slate-700 rounded w-40 mb-3" />
+        <div className="h-3 bg-slate-700 rounded w-full mb-2" />
+        <div className="h-3 bg-slate-700 rounded w-3/4" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-4 text-sm text-red-300">{error}</div>
+    );
+  }
+
+  if (!data) return null;
+
+  const avgBucket = scoreToBucket(data.avg_arrears || 0);
+  const maxBucket = scoreToBucket(data.max_arrears || 0);
+  const counts = data.bucket_counts || { healthy: 0, caution: 0, distressed: 0, critical: 0 };
+  const totalCounted = counts.healthy + counts.caution + counts.distressed + counts.critical;
+
+  const topSchemes = [...(data.schemes || [])]
+    .sort((a, b) => (b.arrears_score || 0) - (a.arrears_score || 0))
+    .slice(0, 10);
+
+  const empty = data.scored_count === 0;
+
+  return (
+    <div className="bg-slate-700/30 border border-slate-600/20 rounded-lg p-5">
+      {/* Header row */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-2">
+          <ShieldCheckIcon className="w-5 h-5 text-amber-400" />
+          <h4 className="text-base font-semibold text-white">Distress Signals</h4>
+          <span className="text-[10px] text-slate-500 uppercase tracking-wider">Companies House</span>
+        </div>
+        {!empty && (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 uppercase tracking-wider">Avg</span>
+              <ArrearsChip score={data.avg_arrears} bucket={avgBucket} />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 uppercase tracking-wider">Max</span>
+              <ArrearsChip score={data.max_arrears} bucket={maxBucket} />
+            </div>
+            <span className="text-slate-500">·</span>
+            <span className="text-slate-400">
+              <span className="text-white font-medium">{data.scored_count}</span>
+              <span className="text-slate-500"> / {data.scheme_count} schemes scored</span>
+            </span>
+          </div>
+        )}
+      </div>
+
+      {empty ? (
+        <div className="text-center py-6 text-sm text-slate-500">
+          <ShieldCheckIcon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+          No arrears data yet. Coverage builds as Companies House lookups complete.
+        </div>
+      ) : (
+        <>
+          {/* Bucket distribution: horizontal stacked bar */}
+          <div className="mb-5">
+            <div className="flex items-center justify-between text-[10px] text-slate-500 uppercase tracking-wider mb-1.5">
+              <span>Bucket distribution</span>
+              <span>{totalCounted} scored</span>
+            </div>
+            <div className="w-full h-6 flex rounded-md overflow-hidden bg-slate-800/50 border border-slate-700/50">
+              {(['healthy', 'caution', 'distressed', 'critical'] as ArrearsBucket[]).map((b) => {
+                const v = counts[b] || 0;
+                if (v === 0) return null;
+                const pct = (v / totalCounted) * 100;
+                const meta = BUCKET_META[b];
+                return (
+                  <div
+                    key={b}
+                    className={cn('h-full flex items-center justify-center text-[10px] font-semibold text-white/90', meta.bar)}
+                    style={{ width: `${pct}%` }}
+                    title={`${meta.label}: ${v}`}
+                  >
+                    {pct > 8 ? v : ''}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex flex-wrap gap-3 mt-2 text-[11px]">
+              {(['healthy', 'caution', 'distressed', 'critical'] as ArrearsBucket[]).map((b) => {
+                const meta = BUCKET_META[b];
+                return (
+                  <div key={b} className="flex items-center gap-1.5">
+                    <span className={cn('w-2 h-2 rounded-full', meta.bar)} />
+                    <span className="text-slate-400">{meta.label}</span>
+                    <span className="text-slate-500">({counts[b] || 0})</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Top schemes table */}
+          <div>
+            <h5 className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider mb-2">
+              Top schemes by arrears
+            </h5>
+            <div className="overflow-x-auto -mx-1">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-[10px] text-slate-500 uppercase tracking-wider border-b border-slate-700/50">
+                    <th className="px-2 py-2 text-left font-medium">Scheme</th>
+                    <th className="px-2 py-2 text-left font-medium">Type</th>
+                    <th className="px-2 py-2 text-right font-medium">Units</th>
+                    <th className="px-2 py-2 text-left font-medium">Arrears</th>
+                    <th className="px-2 py-2 text-left font-medium">Top signal</th>
+                    <th className="px-2 py-2 text-left font-medium">Contract end</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-700/30">
+                  {topSchemes.map((s) => (
+                    <tr key={s.scheme_id} className="hover:bg-slate-800/40 transition-colors">
+                      <td className="px-2 py-2">
+                        <Link
+                          href={`/schemes?expanded=${s.scheme_id}`}
+                          className="text-white hover:text-amber-300 font-medium"
+                        >
+                          {s.name || `Scheme ${s.scheme_id}`}
+                        </Link>
+                      </td>
+                      <td className="px-2 py-2">
+                        {s.scheme_type ? (
+                          <Badge variant={getSchemeTypeColor(s.scheme_type)} size="sm">
+                            {s.scheme_type}
+                          </Badge>
+                        ) : (
+                          <span className="text-slate-600">—</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 text-right text-slate-300 tabular-nums">
+                        {s.units ?? <span className="text-slate-600">—</span>}
+                      </td>
+                      <td className="px-2 py-2">
+                        <ArrearsChip score={s.arrears_score} bucket={s.bucket || scoreToBucket(s.arrears_score)} />
+                      </td>
+                      <td className="px-2 py-2 text-slate-400 max-w-[260px] truncate" title={s.top_signal || ''}>
+                        {s.top_signal || <span className="text-slate-600">—</span>}
+                      </td>
+                      <td className="px-2 py-2 text-slate-400">
+                        {s.contract_end_date ? formatDate(s.contract_end_date) : <span className="text-slate-600">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                  {topSchemes.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-2 py-4 text-center text-slate-500">
+                        No scored schemes yet
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 interface CompanyRow {
   id: string;
@@ -67,11 +338,26 @@ function copyToClipboard(text: string) {
 }
 
 export default function CompaniesPage() {
+  // Deep-link support: ?expanded=<company_id> opens that company's expanded row.
+  // Inbound links from /arrears, dashboard etc. use this — there is no
+  // dedicated /companies/[id] route.
+  const searchParams = useSearchParams();
   const [companies, setCompanies] = useState<CompanyRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [search, setSearch] = useState(() => searchParams?.get('search') || '');
+  const [expandedId, setExpandedId] = useState<string | null>(
+    () => searchParams?.get('expanded') || null,
+  );
   const [mergeModal, setMergeModal] = useState<{ primary: CompanyRow; duplicate: { id: string; name: string; companies_house_number: string; confidence: number } } | null>(null);
+
+  // Scroll the deep-linked company into view on first load
+  useEffect(() => {
+    const expanded = searchParams?.get('expanded');
+    if (!expanded || companies.length === 0) return;
+    const el = document.getElementById(`company-row-${expanded}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companies.length]);
 
   useEffect(() => {
     const params: Record<string, string> = {};
@@ -225,6 +511,7 @@ export default function CompaniesPage() {
                 return (
                   <React.Fragment key={company.id}>
                     <tr
+                      id={`company-row-${company.id}`}
                       className="hover:bg-slate-700/50 transition-colors cursor-pointer"
                       onClick={() => setExpandedId(expandedId === company.id ? null : company.id)}
                     >
@@ -269,6 +556,10 @@ export default function CompaniesPage() {
                     {expandedId === company.id && (
                       <tr>
                         <td colSpan={8} className="px-8 py-5 bg-slate-800/50">
+                          {/* Distress Signals — financial health from Companies House */}
+                          <div className="mb-6">
+                            <DistressSignalsCard companyId={company.id} />
+                          </div>
                           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                             {/* Contacts */}
                             <div>

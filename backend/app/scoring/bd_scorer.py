@@ -77,14 +77,42 @@ _TIER_1_CITIES: set[str] = {
     "glasgow", "liverpool", "sheffield", "nottingham", "cardiff",
 }
 
-# Existing scheme scoring weights.
+# Existing scheme scoring weights — the 4-dimension model.
+# These dimensions map to the BD playbook: a scheme is "in play" when its
+# contract is close to ending, its tenants are unhappy (poor reviews / low
+# CSAT), units are sitting vacant, and the operator's parent company shows
+# financial distress signals (arrears, late filings, recent refinancing).
 _EXISTING_WEIGHTS: dict[str, float] = {
-    "contract_urgency": 0.35,
-    "performance_gap": 0.25,
-    "satisfaction_risk": 0.15,
-    "financial_risk": 0.15,
-    "scheme_size": 0.10,
+    "contract_urgency":     0.35,
+    "csat_gap":             0.25,
+    "occupancy_gap":        0.20,
+    "financial_distress":   0.20,
 }
+
+# Application scoring weights — different mix because applications aren't
+# operating yet, so we can't measure CSAT/occupancy/arrears.
+_APPLICATION_WEIGHTS: dict[str, float] = {
+    "size":             0.30,
+    "scheme_type":      0.25,
+    "planning_stage":   0.20,
+    "recency":          0.15,
+    "applicant_signal": 0.10,
+}
+
+# Known BTR developer / operator name fragments — lowercased, substring-matched
+# against applicant_name. Mirrors the broadened classifier list but pared to
+# the entities whose involvement is the strongest BD signal.
+_KNOWN_DEVELOPER_FRAGMENTS: tuple[str, ...] = (
+    "greystar", "quintain", "get living", "moda", "apo group", "apache capital",
+    "realstar", "way of life", "fizzy living", "essential living", "grainger",
+    "platform", "cortland", "native group", "lifestory", "berkeley group",
+    "berkeley homes", "lendlease", "british land", "landsec", "delancey",
+    "long harbour", "patrizia", "m&g real estate", "legal & general affordable",
+    "aviva investors", "sage housing",
+    # PBSA
+    "unite students", "unite group", "iq student", "fresh student",
+    "vita group", "scape student", "watkin jones",
+)
 
 
 class BDScorer:
@@ -106,48 +134,116 @@ class BDScorer:
     def score_planning_application(self, app: PlanningApplication) -> float:
         """Score a planning application on a 0-100 scale.
 
-        Factors
-        -------
-        * **scheme_type** (weight 0.30) — BTR is most desirable.
-        * **num_units** (weight 0.25) — more units = better opportunity.
-        * **application_stage** (weight 0.20) — approved > submitted.
-        * **location_tier** (weight 0.15) — London premium, tier-1 cities.
-        * **developer_track_record** (weight 0.10) — repeat developers score higher.
+        See :meth:`score_planning_application_breakdown` for the per-dimension
+        breakdown. This is a thin wrapper returning just the composite.
         """
-        # Scheme type.
-        scheme_str = (app.scheme_type or "Unknown")
-        if hasattr(scheme_str, "value"):
-            scheme_str = scheme_str.value
-        scheme_score = _SCHEME_TYPE_SCORES.get(scheme_str, 30.0)
+        return self.score_planning_application_breakdown(app)["composite"]
 
-        # Unit count.
+    def score_planning_application_breakdown(
+        self, app: PlanningApplication,
+    ) -> dict[str, Any]:
+        """Score a planning application and return per-dimension breakdown.
+
+        Dimensions (with weights):
+        - **size** (0.30): num_units; >500 = 100, >200 = 80, >100 = 60, 50-99 = 40, 20-49 = 25, else 10
+        - **scheme_type** (0.25): BTR=100 down to Unknown=20
+        - **planning_stage** (0.20): Submitted/Pending = peak active, Approved = post-decision operator hunt
+        - **recency** (0.15): how fresh the submission is
+        - **applicant_signal** (0.10): known BTR developer = high
+        """
+        scores: dict[str, float] = {}
+
+        # 1. Size
         units = app.num_units if hasattr(app, "num_units") and app.num_units else None
         if units is None and hasattr(app, "unit_count"):
             units = app.unit_count
-        unit_score = self._score_unit_count(units)
+        scores["size"] = self._score_unit_count(units)
 
-        # Application status.
+        # 2. Scheme type
+        scheme_str = (app.scheme_type or "Unknown")
+        if hasattr(scheme_str, "value"):
+            scheme_str = scheme_str.value
+        scores["scheme_type"] = _SCHEME_TYPE_SCORES.get(scheme_str, 20.0)
+
+        # 3. Planning stage
         status = (app.status or "unknown")
         if hasattr(status, "value"):
             status = status.value
-        status_lower = status.lower()
-        status_score = _STATUS_SCORES.get(status_lower, 40.0)
+        scores["planning_stage"] = self._score_planning_stage(status)
 
-        # Location tier.
-        location_score = self._score_location(app)
-
-        # Developer track record.
-        track_record_score = self._score_developer_track_record(app)
-
-        composite = (
-            0.30 * scheme_score
-            + 0.25 * unit_score
-            + 0.20 * status_score
-            + 0.15 * location_score
-            + 0.10 * track_record_score
+        # 4. Recency
+        scores["recency"] = self._score_recency(
+            getattr(app, "submission_date", None)
+            or getattr(app, "submitted_date", None)
         )
 
-        return round(min(max(composite, 0.0), 100.0), 1)
+        # 5. Applicant signal — known BTR developer = strong signal
+        scores["applicant_signal"] = self._score_applicant_signal(
+            getattr(app, "applicant_name", None)
+            or getattr(app, "agent_name", None)
+        )
+
+        composite = sum(_APPLICATION_WEIGHTS[k] * scores[k] for k in _APPLICATION_WEIGHTS)
+        composite = round(min(max(composite, 0.0), 100.0), 1)
+        return {"composite": composite, **scores}
+
+    @staticmethod
+    def _score_planning_stage(status: str | None) -> float:
+        s = (status or "unknown").lower().strip()
+        # BD-value mapping: active planning > approved > everything else
+        if s in ("submitted",):
+            return 100.0
+        if s in ("pending", "pending decision", "validated"):
+            return 95.0
+        if s in ("pre-application", "pre-app"):
+            return 75.0
+        if s in ("approved", "permissioned"):
+            return 60.0  # post-decision = operator hunt phase
+        if s in ("allocated",):
+            return 50.0
+        if s in ("conditions", "decided"):
+            return 40.0
+        if s in ("appeal",):
+            return 35.0
+        if s in ("refused", "withdrawn"):
+            return 5.0
+        return 30.0  # unknown
+
+    @staticmethod
+    def _score_recency(submitted_date) -> float:
+        """Newer applications = higher BD value. Returns 0-100."""
+        if not submitted_date:
+            return 30.0
+        try:
+            today = datetime.date.today()
+            days = (today - submitted_date).days
+        except (TypeError, AttributeError):
+            return 30.0
+        if days < 0:
+            days = 0
+        if days <= 30:
+            return 100.0
+        if days <= 90:
+            return 80.0
+        if days <= 180:
+            return 55.0
+        if days <= 365:
+            return 30.0
+        return 10.0
+
+    @staticmethod
+    def _score_applicant_signal(applicant_text: str | None) -> float:
+        """Known BTR developers/operators in applicant_name = 100; agent
+        placeholder = 25; generic developer = 50; missing = 20."""
+        if not applicant_text:
+            return 20.0
+        t = applicant_text.lower().strip()
+        if any(kw in t for kw in _KNOWN_DEVELOPER_FRAGMENTS):
+            return 100.0
+        # Agent placeholders are noisy non-signals
+        if any(kw in t for kw in ("c/o agent", "c/o ", "agent", "mss ", "mr ", "mrs ")):
+            return 25.0
+        return 50.0
 
     def _score_unit_count(self, units: int | None) -> float:
         """Convert a unit count to a 0-100 score."""
@@ -208,20 +304,33 @@ class BDScorer:
     def score_existing_scheme(self, scheme: ExistingScheme) -> float:
         """Score an existing managed scheme on a 0-100 scale.
 
-        Weighted factors
-        ----------------
-        * **contract_urgency** (0.35): months until contract_end_date.
-          <=6 months = 100, <=12 = 80, <=24 = 50, >24 = 20.
-        * **performance_gap** (0.25): inverse of performance_rating.
-          Low performance = high opportunity.
-        * **satisfaction_risk** (0.15): inverse of satisfaction_score.
-        * **financial_risk** (0.15): inverse of financial_health_score.
-        * **scheme_size** (0.10): num_units normalised.
-          >500 = 100, >200 = 70, >100 = 50, else 30.
+        Thin wrapper around :meth:`score_existing_scheme_breakdown` returning
+        only the composite.
+        """
+        return self.score_existing_scheme_breakdown(scheme)["composite"]
+
+    def score_existing_scheme_breakdown(
+        self, scheme: ExistingScheme,
+    ) -> dict[str, Any]:
+        """Score an existing managed scheme and return per-dimension breakdown.
+
+        Dimensions (with weights):
+        - **contract_urgency** (0.35): months until contract_end_date.
+          <=6mo = 100, 6-12 = 85, 12-24 = 55, >24 = 20, unknown = 35.
+        - **csat_gap** (0.25): inverse of operator's Google rating / CSAT.
+          Low rating = high BD opportunity. Reads `google_rating` first,
+          falls back to legacy `satisfaction_score`, then default 40.
+        - **occupancy_gap** (0.20): inverse of `occupancy_rate` (0.0-1.0).
+          Vacant units = lost revenue = vulnerable operator. Falls back
+          to legacy `performance_rating`, then default 45.
+        - **financial_distress** (0.20): operator financial signals
+          (Companies House late filings, recent debenture charges, etc).
+          Reads `arrears_risk_score`, falls back to legacy
+          `financial_health_score`, then default 40.
         """
         scores: dict[str, float] = {}
 
-        # Prefer SchemeContract end date if available
+        # --- 1. Contract urgency ---
         from app.models.models import SchemeContract
         current_contract = (
             self._db.query(SchemeContract)
@@ -238,65 +347,74 @@ class BDScorer:
             if current_contract
             else scheme.contract_end_date
         )
-
-        # Contract urgency.
         if effective_end_date:
             today = datetime.date.today()
             months_remaining = (
                 (effective_end_date.year - today.year) * 12
                 + (effective_end_date.month - today.month)
             )
-            if months_remaining <= 0:
-                scores["contract_urgency"] = 100.0
-            elif months_remaining <= 6:
+            if months_remaining <= 6:
                 scores["contract_urgency"] = 100.0
             elif months_remaining <= 12:
-                scores["contract_urgency"] = 80.0
+                scores["contract_urgency"] = 85.0
             elif months_remaining <= 24:
-                scores["contract_urgency"] = 50.0
+                scores["contract_urgency"] = 55.0
             else:
                 scores["contract_urgency"] = 20.0
         else:
-            scores["contract_urgency"] = 30.0  # Unknown = moderate default.
+            scores["contract_urgency"] = 35.0  # unknown default
 
-        # Performance gap (lower rating = higher opportunity).
-        perf = scheme.performance_rating
-        if perf is not None:
-            # Assume rating is 0-100 scale.
-            scores["performance_gap"] = max(0.0, 100.0 - perf)
+        # --- 2. CSAT gap ---
+        # google_rating is 0-5 (Google Places scale). Convert to a 0-100 gap.
+        gr = getattr(scheme, "google_rating", None)
+        if gr is not None and gr > 0:
+            if gr < 3.5:
+                scores["csat_gap"] = 100.0
+            elif gr < 4.0:
+                scores["csat_gap"] = 70.0
+            elif gr < 4.5:
+                scores["csat_gap"] = 35.0
+            else:
+                scores["csat_gap"] = 10.0
+        elif scheme.satisfaction_score is not None:
+            # Legacy field, 0-100 scale; gap = inverse.
+            scores["csat_gap"] = max(0.0, 100.0 - scheme.satisfaction_score)
         else:
-            scores["performance_gap"] = 50.0
+            scores["csat_gap"] = 40.0
 
-        # Satisfaction risk.
-        sat = scheme.satisfaction_score
-        if sat is not None:
-            scores["satisfaction_risk"] = max(0.0, 100.0 - sat)
+        # --- 3. Occupancy gap ---
+        occ = getattr(scheme, "occupancy_rate", None)
+        if occ is not None and 0.0 <= occ <= 1.0:
+            occ_pct = occ * 100
+            if occ_pct < 80:
+                scores["occupancy_gap"] = 100.0
+            elif occ_pct < 92:
+                scores["occupancy_gap"] = 60.0
+            elif occ_pct < 98:
+                scores["occupancy_gap"] = 25.0
+            else:
+                scores["occupancy_gap"] = 10.0
+        elif scheme.performance_rating is not None:
+            # Legacy field used as occupancy proxy; gap = inverse.
+            scores["occupancy_gap"] = max(0.0, 100.0 - scheme.performance_rating)
         else:
-            scores["satisfaction_risk"] = 50.0
+            scores["occupancy_gap"] = 45.0
 
-        # Financial risk.
-        fin = scheme.financial_health_score
-        if fin is not None:
-            scores["financial_risk"] = max(0.0, 100.0 - fin)
+        # --- 4. Financial distress ---
+        arr = getattr(scheme, "arrears_risk_score", None)
+        if arr is not None and 0.0 <= arr <= 100.0:
+            # arrears_risk_score is already 0-100 (higher = more distress = more BD opportunity)
+            scores["financial_distress"] = float(arr)
+        elif scheme.financial_health_score is not None:
+            # Legacy: financial_health is 0-100 where higher = healthier.
+            # Distress = inverse.
+            scores["financial_distress"] = max(0.0, 100.0 - scheme.financial_health_score)
         else:
-            scores["financial_risk"] = 50.0
+            scores["financial_distress"] = 40.0
 
-        # Scheme size.
-        units = scheme.num_units or 0
-        if units > 500:
-            scores["scheme_size"] = 100.0
-        elif units > 200:
-            scores["scheme_size"] = 70.0
-        elif units > 100:
-            scores["scheme_size"] = 50.0
-        else:
-            scores["scheme_size"] = 30.0
-
-        composite = sum(
-            _EXISTING_WEIGHTS[k] * scores[k] for k in _EXISTING_WEIGHTS
-        )
-
-        return round(min(max(composite, 0.0), 100.0), 1)
+        composite = sum(_EXISTING_WEIGHTS[k] * scores[k] for k in _EXISTING_WEIGHTS)
+        composite = round(min(max(composite, 0.0), 100.0), 1)
+        return {"composite": composite, **scores}
 
     # ------------------------------------------------------------------
     # Company scoring
