@@ -103,3 +103,5 @@ backups/
 backend/afs_sitemap.xml
 backend/sturents_searchjs.js
 *.tsbuildinfo
+
+.claude/settings.local.json
