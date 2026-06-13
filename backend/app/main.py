@@ -20,6 +20,7 @@ from app.api.arrears import router as arrears_router
 from app.api.auth import router as auth_router
 from app.api.users import router as users_router
 from app.api.ai_enrichment import router as ai_enrichment_router
+from app.api.ownership import router as ownership_router
 
 logger = structlog.get_logger()
 
@@ -82,6 +83,7 @@ app.include_router(arrears_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(ai_enrichment_router)
+app.include_router(ownership_router)
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ class Settings(BaseSettings):
 
     # External API Keys
     COMPANIES_HOUSE_API_KEY: str = ""
+    HMLR_API_KEY: str = ""
     APOLLO_API_KEY: str = ""
     HUNTER_API_KEY: str = ""
 

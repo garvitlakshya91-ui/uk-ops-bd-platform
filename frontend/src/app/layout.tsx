@@ -21,6 +21,7 @@ import {
   PlusIcon,
   ArrowRightOnRectangleIcon,
   UserGroupIcon,
+  ShareIcon,
 } from '@heroicons/react/24/outline';
 import { cn } from '@/lib/utils';
 import { AuthProvider, useAuth } from '@/lib/auth';
@@ -47,6 +48,7 @@ const allNavItems = [
   { href: '/contracts', label: 'Contracts', icon: DocumentDuplicateIcon },
   { href: '/companies', label: 'Companies', icon: BuildingLibraryIcon },
   { href: '/arrears', label: 'Arrears & Risk', icon: ExclamationTriangleIcon },
+  { href: '/ownership', label: 'Ownership', icon: ShareIcon },
   { href: '/alerts', label: 'Alerts', icon: BellAlertIcon },
   { href: '/scraper-health', label: 'Scraper Health', icon: CpuChipIcon },
   { href: '/users', label: 'Users', icon: UserGroupIcon },

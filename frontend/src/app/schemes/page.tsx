@@ -13,6 +13,7 @@ import {
   SparklesIcon,
   PlusCircleIcon,
   CheckCircleIcon,
+  ShareIcon,
 } from '@heroicons/react/24/outline';
 import { cn, formatDate, getSchemeTypeColor, getPriorityColor, getBdScoreColor, getBdScoreBarColor, getContractEndColor, formatNumber } from '@/lib/utils';
 import Card from '@/components/ui/Card';
@@ -26,6 +27,7 @@ import InlineFieldEdit from '@/components/InlineFieldEdit';
 import FilterPanel, { SchemeFilters, DEFAULT_FILTERS, countActiveFilters } from '@/components/schemes/FilterPanel';
 import ActiveFilterPills from '@/components/schemes/ActiveFilterPills';
 import { getSchemesFilterOptions, SchemesFilterOptions } from '@/lib/api';
+import { SchemeOwnership, ownerTypeTone, OWNER_TYPE_BADGE, OWNER_TYPE_BAR } from '@/app/ownership/types';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AdjustmentsHorizontalIcon } from '@heroicons/react/24/outline';
@@ -527,6 +529,195 @@ function OperatorHealthPanel({ scheme }: { scheme: SchemeRow }) {
             <Link href="/arrears" className="ml-1 text-amber-400 hover:text-amber-300">View all distressed schemes →</Link>
           </p>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Ownership chain panel — scheme → owner SPV → platform → ultimate owner.
+// Lazy: only mounted when the scheme row is expanded, fetching
+// /api/v2/ownership/scheme/{id} on first render.
+const UK_COUNTRY_NAMES = new Set([
+  'united kingdom', 'uk', 'great britain', 'england', 'wales', 'scotland',
+  'northern ireland', 'england and wales',
+]);
+
+function isNonUkCountry(country?: string | null): boolean {
+  if (!country) return false;
+  return !UK_COUNTRY_NAMES.has(country.trim().toLowerCase());
+}
+
+function chainKindBadge(kind: string) {
+  const k = kind.toLowerCase();
+  const cls = k.includes('individual')
+    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+    : 'bg-blue-500/15 text-blue-300 border-blue-500/40';
+  const label = k.includes('individual') ? 'Individual' : 'Corporate';
+  return (
+    <span className={cn('text-[9px] px-1.5 py-0.5 rounded border uppercase tracking-wide font-semibold', cls)}>
+      {label}
+    </span>
+  );
+}
+
+interface OwnershipDisplayNode {
+  name: string;
+  kind: string;
+  ch_number: string | null;
+  country: string | null;
+  isOwner?: boolean;
+  isUltimate?: boolean;
+}
+
+function OwnershipPanel({ schemeId }: { schemeId: string }) {
+  const [data, setData] = React.useState<SchemeOwnership | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    api.get(`/v2/ownership/scheme/${schemeId}`)
+      .then(res => { setData(res.data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [schemeId]);
+
+  if (loading) return <div className="mt-6 text-xs text-slate-500">Loading ownership chain...</div>;
+  if (!data) return null;
+
+  // No owner linked yet — HMLR title data hasn't been ingested for this scheme.
+  if (!data.owner_company_id) {
+    return (
+      <div className="mt-6 rounded-lg border border-slate-700/40 bg-slate-800/30 p-4">
+        <div className="flex items-center gap-2 mb-1">
+          <ShareIcon className="w-4 h-4 text-slate-500" />
+          <h4 className="text-sm font-semibold text-slate-300">Ownership</h4>
+        </div>
+        <p className="text-xs text-slate-500">No owner recorded — HMLR ingest pending.</p>
+      </div>
+    );
+  }
+
+  const ownerName = (data.owner_name || '').toLowerCase();
+  const chain = data.chain || [];
+  // 'statement' nodes are CH declarations (e.g. no-PSC), not entities
+  const statements = chain.filter((n) => n.kind === 'statement');
+  const entities = chain.filter(
+    (n) => n.kind !== 'statement' && n.name.toLowerCase() !== ownerName,
+  );
+
+  const nodes: OwnershipDisplayNode[] = [
+    {
+      name: data.owner_name || 'Unknown owner',
+      kind: 'corporate',
+      ch_number: data.owner_ch_number,
+      country: null,
+      isOwner: true,
+    },
+    ...entities.map((n) => ({
+      name: n.name,
+      kind: n.kind,
+      ch_number: n.ch_number,
+      country: n.country,
+    })),
+  ];
+  const ultimateName = (data.ultimate_owner_name || '').toLowerCase();
+  if (ultimateName) {
+    const match = nodes.find((n) => n.name.toLowerCase() === ultimateName);
+    if (match) {
+      match.isUltimate = true;
+    } else {
+      nodes.push({
+        name: data.ultimate_owner_name!,
+        kind: 'corporate',
+        ch_number: null,
+        country: null,
+        isUltimate: true,
+      });
+    }
+  }
+
+  const typeTone = ownerTypeTone(data.ultimate_owner_type);
+
+  return (
+    <div className="mt-6 rounded-lg border border-slate-700/40 bg-slate-800/30 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-slate-700/40 flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <ShareIcon className="w-4 h-4 text-violet-400" />
+          <h4 className="text-sm font-semibold text-white">Ownership Chain</h4>
+          {data.is_spv_candidate && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded border uppercase tracking-wide font-semibold bg-violet-500/15 text-violet-300 border-violet-500/40">
+              SPV
+            </span>
+          )}
+        </div>
+        {data.ultimate_owner_type && (
+          <span className={cn('inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border', OWNER_TYPE_BADGE[typeTone])}>
+            {data.ultimate_owner_type}
+          </span>
+        )}
+      </div>
+
+      {/* Vertical breadcrumb */}
+      <div className="p-5">
+        <div>
+          {nodes.map((n, i) => (
+            <div key={`${n.name}-${i}`} className="flex gap-3">
+              {/* Connector column */}
+              <div className="flex flex-col items-center">
+                <div
+                  className={cn(
+                    'w-2.5 h-2.5 rounded-full mt-1 flex-shrink-0',
+                    n.isUltimate ? OWNER_TYPE_BAR[typeTone] : n.isOwner ? 'bg-violet-500' : 'bg-slate-600',
+                  )}
+                />
+                {i < nodes.length - 1 && <div className="w-px flex-1 bg-slate-700 my-1" />}
+              </div>
+              {/* Node */}
+              <div className={cn('min-w-0', i < nodes.length - 1 ? 'pb-4' : 'pb-0')}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={cn('text-sm font-medium', n.isUltimate ? 'text-white' : 'text-slate-200')}>
+                    {n.name}
+                  </span>
+                  {chainKindBadge(n.kind)}
+                  {n.isOwner && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded border uppercase tracking-wide font-semibold bg-slate-700/50 text-slate-400 border-slate-600">
+                      Owner
+                    </span>
+                  )}
+                  {n.isOwner && data.is_spv_candidate && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded border uppercase tracking-wide font-semibold bg-violet-500/15 text-violet-300 border-violet-500/40">
+                      SPV
+                    </span>
+                  )}
+                  {n.isUltimate && (
+                    <span className={cn('text-[9px] px-1.5 py-0.5 rounded border uppercase tracking-wide font-semibold', OWNER_TYPE_BADGE[typeTone])}>
+                      Ultimate owner
+                    </span>
+                  )}
+                  {isNonUkCountry(n.country) && (
+                    <span className="text-[10px] text-violet-300 uppercase tracking-wide">{n.country}</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 mt-0.5">
+                  {n.ch_number && (
+                    <span className="text-[10px] font-mono text-slate-500">CH {n.ch_number}</span>
+                  )}
+                  {n.isOwner && data.registered_office && (
+                    <span className="text-[10px] text-slate-500 truncate">{data.registered_office}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {statements.length > 0 && (
+          <p className="mt-3 text-[10px] text-slate-500 italic">
+            {statements.map((s) => s.name.replace(/-/g, ' ')).join(' · ')}
+          </p>
+        )}
+        {entities.length === 0 && !data.ultimate_owner_name && (
+          <p className="mt-3 text-[10px] text-slate-500 italic">PSC chain not walked yet.</p>
+        )}
       </div>
     </div>
   );
@@ -1668,6 +1859,9 @@ export default function SchemesPage() {
 
                           {/* Operator Health (arrears / Companies House distress signals) */}
                           <OperatorHealthPanel scheme={scheme} />
+
+                          {/* Ownership chain (PSC walk: owner SPV → platform → ultimate owner) */}
+                          <OwnershipPanel schemeId={scheme.id} />
 
                           {/* Rent Tiers */}
                           <RentPanel schemeId={scheme.id} />

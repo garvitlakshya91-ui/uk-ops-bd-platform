@@ -105,3 +105,9 @@ backend/sturents_searchjs.js
 *.tsbuildinfo
 
 .claude/settings.local.json
+
+# Ownership/HMLR data + deck captures
+backend/data/hmlr/
+backend/data/spv_discovery/
+deck/shots/
+deck/capture_*.js
