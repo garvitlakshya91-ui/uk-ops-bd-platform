@@ -686,7 +686,7 @@ export default function DashboardPage() {
           <CalendarDaysIcon className="w-4 h-4" />
           Schedule Review
         </button>
-        <button className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 rounded-xl text-sm font-medium text-white transition-all duration-200 shadow-lg shadow-blue-500/20 card-hover-lift">
+        <button className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-ember-600 to-ember-500 hover:from-ember-500 hover:to-ember-400 rounded-xl text-sm font-medium text-white transition-all duration-200 shadow-lg shadow-ember-500/20 card-hover-lift">
           <ArrowPathIcon className="w-4 h-4" />
           Sync Data
         </button>

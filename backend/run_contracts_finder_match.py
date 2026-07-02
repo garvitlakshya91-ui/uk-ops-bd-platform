@@ -1,4 +1,4 @@
-"""Contracts Finder → existing-scheme contract matcher (credit-free).
+"""Contracts Finder -> existing-scheme contract matcher (credit-free).
 
 Fetches housing/PBSA contract notices from the free Contracts Finder
 OCDS API and attaches them to EXISTING schemes only. Unlike the stock
@@ -117,7 +117,7 @@ def fetch(days: int, use_cache: bool = False):
                     )
                 except Exception as exc:
                     print(f"  [term FAILED] {w_from} {term!r}: {exc} "
-                          f"— cooling down 300s", flush=True)
+                          f"- cooling down 300s", flush=True)
                     time.sleep(300)
                     continue
                 for b in batch:
@@ -136,18 +136,18 @@ def fetch(days: int, use_cache: bool = False):
         done = wf + ".done"
         if os.path.exists(done):
             out.extend(_load_jsonl(wf))
-            print(f"  [cached window] {w_from} → {w_to}", flush=True)
+            print(f"  [cached window] {w_from} -> {w_to}", flush=True)
             continue
         if use_cache:
             continue
         n = asyncio.run(_fetch_window(w_from, w_to, wf))
         open(done, "w").close()
         out.extend(_load_jsonl(wf))
-        print(f"  [window done] {w_from} → {w_to}: {n:,} notices "
-              f"— cooldown 120s", flush=True)
+        print(f"  [window done] {w_from} -> {w_to}: {n:,} notices "
+              f"- cooldown 120s", flush=True)
         time.sleep(120)
 
-    # legacy single-file cache (first partial run) — merge if present
+    # legacy single-file cache (first partial run) - merge if present
     legacy = os.path.join(CACHE, f"notices_{days}d.jsonl")
     if os.path.exists(legacy):
         seen = {b.get("source_reference") for b in out}
@@ -243,7 +243,7 @@ def main():
             op_id = op_by_norm.get(norm(supplier)) if supplier else None
             matched = False
 
-            # Rule A — postcode in notice text -> specific scheme(s)
+            # Rule A - postcode in notice text -> specific scheme(s)
             pcs = {f"{a}{b}" for a, b in PC_RE.findall(blob.upper())}
             hit_sids = {sid for pc in pcs for sid in pc2scheme.get(pc, [])}
             if hit_sids and len(hit_sids) <= 5:
@@ -251,7 +251,7 @@ def main():
                     add_contract(sid, n, "Management (postcode match)", op_id)
                 matched = True
 
-            # Rule B — buyer owns BD stock (council / HA stock-wide contract)
+            # Rule B - buyer owns BD stock (council / HA stock-wide contract)
             if not matched and buyer:
                 own = owner_by_norm.get(norm(buyer))
                 if own and n.get("contract_end_date"):
@@ -267,7 +267,7 @@ def main():
                     stats["ruleB_owners"] += 1
                     matched = True
 
-            # Rule C — university buyer + known operator supplier -> PBSA
+            # Rule C - university buyer + known operator supplier -> PBSA
             if not matched and "universit" in (buyer or "").lower() and op_id:
                 city_tokens = [t for t in norm(buyer).split()
                                if t not in ("university", "universities")]

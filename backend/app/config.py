@@ -106,7 +106,10 @@ class Settings(BaseSettings):
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # CORS
-    CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3010", "http://localhost:5173"]
+    CORS_ORIGINS: list[str] = [
+        "http://localhost:3000", "http://localhost:3010", "http://localhost:5173",
+        "http://localhost:3015", "http://127.0.0.1:3015",  # local dev server
+    ]
 
     model_config = {
         "env_file": os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"),

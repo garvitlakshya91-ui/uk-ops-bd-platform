@@ -45,7 +45,7 @@ export default function RegisterPage() {
       <div className="w-full max-w-md">
         {/* Brand */}
         <div className="flex items-center justify-center gap-3 mb-8">
-          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 via-blue-600 to-purple-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
+          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-ember-400 via-ember-500 to-ember-700 flex items-center justify-center shadow-lg shadow-ember-500/20">
             <span className="text-white font-bold text-base">UK</span>
           </div>
           <div>
@@ -139,7 +139,7 @@ export default function RegisterPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 transition-all duration-200 shadow-lg shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium text-white bg-gradient-to-r from-ember-600 to-ember-500 hover:from-ember-500 hover:to-ember-400 transition-all duration-200 shadow-lg shadow-ember-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? (
                 <>
@@ -176,7 +176,7 @@ export default function RegisterPage() {
           Already have an account?{' '}
           <Link
             href="/login"
-            className="text-blue-400 hover:text-blue-300 font-medium transition-colors"
+            className="text-ember-400 hover:text-ember-300 font-medium transition-colors"
           >
             Sign in
           </Link>

@@ -979,7 +979,7 @@ function AddToPipelineModal({ scheme, isOpen, onClose, onSuccess }: {
           <button
             onClick={handleSubmit}
             disabled={submitting}
-            className="px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-ember-600 to-ember-500 hover:from-ember-500 hover:to-ember-400 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             <PlusCircleIcon className="w-4 h-4" />
             {submitting ? 'Adding...' : 'Add to Pipeline'}
@@ -1370,7 +1370,7 @@ export default function SchemesPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 via-violet-400 to-purple-400 bg-clip-text text-transparent">
+          <h1 className="text-2xl font-bold bg-gradient-to-r from-ember-300 via-ember-400 to-[#E0756E] bg-clip-text text-transparent">
             Scheme Intelligence
           </h1>
           <p className="text-sm text-slate-400 mt-1">Loading schemes...</p>
@@ -1391,7 +1391,7 @@ export default function SchemesPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-400 via-violet-400 to-purple-400 bg-clip-text text-transparent">
+        <h1 className="text-2xl font-bold bg-gradient-to-r from-ember-300 via-ember-400 to-[#E0756E] bg-clip-text text-transparent">
           Scheme Intelligence
         </h1>
         <p className="text-sm text-slate-400 mt-1">Existing schemes with BD scoring, contract tracking, and competitive analysis</p>
@@ -1610,27 +1610,27 @@ export default function SchemesPage() {
               <tr className="border-b border-slate-700">
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase w-8"></th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('name')}>
-                  Name {sortBy === 'name' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                  Name {sortBy === 'name' && <span className="text-ember-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase">Operator</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('scheme_type')}>
-                  Type {sortBy === 'scheme_type' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                  Type {sortBy === 'scheme_type' && <span className="text-ember-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('units')}>
-                  Units {sortBy === 'units' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                  Units {sortBy === 'units' && <span className="text-ember-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('contract_end')}>
-                  Contract End {sortBy === 'contract_end' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                  Contract End {sortBy === 'contract_end' && <span className="text-ember-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('min_rent')}>
                   From £/wk {sortBy === 'min_rent' && <span className="text-amber-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
                 </th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('performance')}>
-                  Perf. {sortBy === 'performance' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                  Perf. {sortBy === 'performance' && <span className="text-ember-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
                 </th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase">Satisf.</th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none" onClick={() => handleSort('bd_score')}>
-                  BD Score {sortBy === 'bd_score' && <span className="text-blue-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
+                  BD Score {sortBy === 'bd_score' && <span className="text-ember-400">{sortDir === 'asc' ? ' \u25B2' : ' \u25BC'}</span>}
                 </th>
                 <th
                   className="px-4 py-3 text-center text-xs font-medium text-slate-400 uppercase cursor-pointer hover:text-white transition-colors select-none"
@@ -1891,7 +1891,7 @@ export default function SchemesPage() {
                                 <PermissionGate resource="pipeline" action="create">
                                   <button
                                     onClick={(e) => { e.stopPropagation(); setPipelineModalScheme(scheme); }}
-                                    className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-500 hover:to-purple-500 rounded-lg transition-all shadow-lg shadow-blue-500/20"
+                                    className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-gradient-to-r from-ember-600 to-ember-500 hover:from-ember-500 hover:to-ember-400 rounded-lg transition-all shadow-lg shadow-ember-500/20"
                                   >
                                     <PlusCircleIcon className="w-5 h-5" />
                                     Add to Pipeline

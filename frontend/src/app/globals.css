@@ -1,10 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   body {
-    @apply bg-slate-900 text-slate-200 antialiased;
+    @apply text-slate-200 antialiased font-sans;
+    /* Warm charcoal base with a soft ambient aurora — the colour field
+       behind the glass. Fixed so panels blur it as content scrolls. */
+    background-color: #14100b;
+    background-image:
+      radial-gradient(ellipse 55% 45% at 12% -8%, rgba(242, 166, 90, 0.13), transparent 60%),
+      radial-gradient(ellipse 45% 40% at 95% 8%, rgba(224, 110, 90, 0.09), transparent 55%),
+      radial-gradient(ellipse 60% 50% at 70% 105%, rgba(150, 110, 220, 0.08), transparent 60%),
+      radial-gradient(ellipse 40% 35% at 35% 60%, rgba(232, 143, 60, 0.05), transparent 55%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-display;
+    letter-spacing: -0.02em;
   }
 
   ::-webkit-scrollbar {
@@ -13,16 +30,17 @@
   }
 
   ::-webkit-scrollbar-track {
-    @apply bg-slate-900/50;
+    background: transparent;
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-slate-700/60 rounded-full;
+    background: rgba(154, 142, 125, 0.35);
+    border-radius: 9999px;
     border: 1px solid transparent;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-slate-500/80;
+    background: rgba(242, 166, 90, 0.5);
   }
 
   ::-webkit-scrollbar-corner {
@@ -32,25 +50,43 @@
 
 @layer components {
   .sidebar-link {
-    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/80 transition-all duration-200;
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 transition-all duration-200 cursor-pointer;
+  }
+
+  .sidebar-link:hover {
+    @apply text-slate-100;
+    background: rgba(255, 244, 230, 0.05);
   }
 
   .sidebar-link.active {
-    @apply bg-blue-500/10 text-blue-400 border-r-2 border-blue-500;
+    color: #f6ba71;
+    background: linear-gradient(135deg, rgba(242, 166, 90, 0.14), rgba(232, 143, 60, 0.06));
+    box-shadow: inset 0 1px 0 rgba(255, 244, 230, 0.08), 0 1px 12px -6px rgba(242, 166, 90, 0.35);
   }
 
+  /* ---- Liquid glass surfaces -------------------------------------- */
   .glass-card {
-    @apply bg-slate-800/80 backdrop-blur-sm border border-slate-700/50 rounded-xl shadow-xl;
+    @apply rounded-2xl;
+    background: linear-gradient(160deg, rgba(48, 40, 30, 0.52), rgba(28, 23, 17, 0.62));
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    border: 1px solid rgba(255, 236, 214, 0.09);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 244, 230, 0.07),
+      0 4px 24px -8px rgba(0, 0, 0, 0.45);
   }
 
   .glass-card-premium {
-    @apply bg-slate-800/60 backdrop-blur-xl border border-slate-600/30 rounded-2xl shadow-2xl;
-    background: linear-gradient(135deg, rgba(30,41,59,0.9) 0%, rgba(15,23,42,0.95) 100%);
+    @apply rounded-2xl relative;
+    background: linear-gradient(165deg, rgba(54, 44, 32, 0.55) 0%, rgba(24, 19, 14, 0.72) 100%);
+    backdrop-filter: blur(20px) saturate(150%);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid rgba(255, 236, 214, 0.1);
     box-shadow:
-      0 0 0 1px rgba(148,163,184,0.05),
-      0 4px 6px -1px rgba(0,0,0,0.3),
-      0 10px 40px -5px rgba(0,0,0,0.4),
-      inset 0 1px 0 rgba(148,163,184,0.05);
+      inset 0 1px 0 rgba(255, 244, 230, 0.09),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.2),
+      0 8px 40px -12px rgba(0, 0, 0, 0.55),
+      0 2px 12px -4px rgba(242, 166, 90, 0.06);
   }
 
   .glass-card-premium::before {
@@ -59,7 +95,7 @@
     inset: 0;
     border-radius: inherit;
     padding: 1px;
-    background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.08), transparent 60%);
+    background: linear-gradient(135deg, rgba(242, 166, 90, 0.28), rgba(224, 110, 90, 0.1), transparent 55%);
     -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     -webkit-mask-composite: xor;
     mask-composite: exclude;
@@ -73,13 +109,14 @@
   .card-hover-lift:hover {
     transform: translateY(-2px);
     box-shadow:
-      0 0 0 1px rgba(59,130,246,0.1),
-      0 10px 40px -10px rgba(0,0,0,0.5),
-      0 4px 20px -5px rgba(59,130,246,0.08);
+      inset 0 1px 0 rgba(255, 244, 230, 0.1),
+      0 0 0 1px rgba(242, 166, 90, 0.14),
+      0 14px 44px -12px rgba(0, 0, 0, 0.55),
+      0 4px 24px -6px rgba(242, 166, 90, 0.12);
   }
 
   .gradient-text-premium {
-    background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 40%, #38bdf8 80%, #818cf8 100%);
+    background: linear-gradient(135deg, #f6ba71 0%, #f2a65a 35%, #e0756e 70%, #d8a06a 100%);
     background-size: 200% auto;
     -webkit-background-clip: text;
     background-clip: text;
@@ -99,18 +136,18 @@
     bottom: 8px;
     width: 3px;
     border-radius: 0 3px 3px 0;
-    background: var(--accent-gradient, linear-gradient(180deg, #3b82f6, #8b5cf6));
+    background: var(--accent-gradient, linear-gradient(180deg, #f2a65a, #e0756e));
   }
 
   .kanban-drag-ghost {
     @apply opacity-60 rotate-2 scale-105;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
   }
 }
 
 @layer utilities {
   .text-gradient {
-    @apply bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent;
+    @apply bg-gradient-to-r from-ember-300 to-ember-500 bg-clip-text text-transparent;
   }
 }
 
@@ -128,20 +165,20 @@
 
 @keyframes pulseGlow {
   0%, 100% {
-    box-shadow: 0 0 4px rgba(239,68,68,0.4), 0 0 12px rgba(239,68,68,0.1);
+    box-shadow: 0 0 4px rgba(239, 68, 68, 0.4), 0 0 12px rgba(239, 68, 68, 0.1);
   }
   50% {
-    box-shadow: 0 0 8px rgba(239,68,68,0.6), 0 0 24px rgba(239,68,68,0.2);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.6), 0 0 24px rgba(239, 68, 68, 0.2);
   }
 }
 
 @keyframes pulseGlowGreen {
   0%, 100% {
-    box-shadow: 0 0 4px rgba(34,197,94,0.4);
+    box-shadow: 0 0 4px rgba(52, 199, 123, 0.4);
     opacity: 1;
   }
   50% {
-    box-shadow: 0 0 10px rgba(34,197,94,0.6);
+    box-shadow: 0 0 10px rgba(52, 199, 123, 0.6);
     opacity: 0.6;
   }
 }
@@ -193,6 +230,24 @@
   animation: pulseGlowGreen 2s ease-in-out infinite;
 }
 
+/* Respect user motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .animate-count-up,
+  .animate-fade-in-up,
+  .animate-slide-in-right,
+  .pulse-glow-red,
+  .pulse-glow-green,
+  .gradient-text-premium,
+  .progress-shimmer::after {
+    animation: none !important;
+  }
+
+  .card-hover-lift,
+  .card-hover-lift:hover {
+    transform: none;
+  }
+}
+
 /* Animated progress bar with shimmer */
 .progress-shimmer {
   position: relative;
@@ -209,45 +264,45 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(255,255,255,0.12) 50%,
+    rgba(255, 244, 230, 0.1) 50%,
     transparent 100%
   );
   animation: shimmer 2.5s ease-in-out infinite;
 }
 
-/* Row hover with blue left border */
+/* Row hover with warm amber left border */
 .table-row-hover {
   @apply transition-all duration-200;
   border-left: 3px solid transparent;
 }
 
 .table-row-hover:hover {
-  @apply bg-slate-700/40;
-  border-left-color: #3b82f6;
+  background: rgba(255, 236, 214, 0.045);
+  border-left-color: #f2a65a;
 }
 
-/* Recharts overrides for dark theme */
+/* Recharts overrides for warm dark theme */
 .recharts-cartesian-grid line {
-  stroke: #1e293b;
+  stroke: #2c261e;
 }
 
 .recharts-text {
-  fill: #94a3b8;
+  fill: #9a8e7d;
   font-size: 12px;
 }
 
 .recharts-tooltip-wrapper .recharts-default-tooltip {
-  background-color: #0f172a !important;
-  border: 1px solid #334155 !important;
-  border-radius: 12px !important;
+  background-color: rgba(23, 19, 14, 0.92) !important;
+  border: 1px solid rgba(255, 236, 214, 0.12) !important;
+  border-radius: 14px !important;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5) !important;
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(14px);
 }
 
 .recharts-tooltip-item {
-  color: #e2e8f0 !important;
+  color: #e5dacb !important;
 }
 
 .recharts-tooltip-label {
-  color: #94a3b8 !important;
+  color: #9a8e7d !important;
 }
