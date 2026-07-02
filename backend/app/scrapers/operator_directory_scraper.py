@@ -651,6 +651,80 @@ BRAND_CONFIGS: dict[str, dict[str, Any]] = {
         "notes": "WordPress; address in a PHP-serialised location_pin blob. "
                  "Slow origin - generous timeout.",
     },
+    # ---- BTR / co-living brands (added 2026-07-02) ----------------------
+    "way_of_life": {
+        "operator": "Way of Life",
+        "robots": "https://www.wayoflife.com/robots.txt",
+        "sitemaps": ["https://www.wayoflife.com/sitemap_units.xml"],
+        "derive_parent": r"^(https://www\.wayoflife\.com/locations/[a-z0-9\-]+/[a-z0-9\-]+)/home-",
+        "include": r"^https://www\.wayoflife\.com/locations/[a-z0-9\-]+/[a-z0-9\-]+/?$",
+        "parse": parse_text_page,
+        "city_seg": -2,
+        "rent_heuristic": True,
+        "notes": "BTR. Unit pages /locations/<city>/<building>/home-<n> in "
+                 "sitemap_units; building page derived as parent.",
+    },
+    "quintain_living": {
+        "operator": "Quintain Living",
+        "robots": "https://www.quintainliving.com/robots.txt",
+        "sitemaps": ["https://www.quintainliving.com/sitemap.xml"],
+        "derive_parent": r"^(https://www\.quintainliving\.com/development/[a-z0-9\-]+/[a-z0-9\-]+)/",
+        "include": r"^https://www\.quintainliving\.com/development/[a-z0-9\-]+/[a-z0-9\-]+/?$",
+        "parse": parse_text_page,
+        "city_seg": -1,
+        "rent_heuristic": True,
+        "notes": "BTR, all Wembley Park London. Unit pages "
+                 "/development/<dev>/<block>/<unit> -> block page as parent.",
+    },
+    "get_living": {
+        "operator": "Get Living",
+        "robots": "https://www.getliving.com/robots.txt",
+        "sitemaps": ["https://www.getliving.com/listings-sitemap.xml"],
+        "derive_parent": r"^(https://www\.getliving\.com/find-a-home/[a-z0-9\-]+)/",
+        "include": r"^https://www\.getliving\.com/find-a-home/[a-z0-9\-]+/$",
+        "parse": parse_text_page,
+        "rent_heuristic": True,
+        "notes": "BTR neighbourhoods (East Village, Elephant Central, ...). "
+                 "Unit listings -> neighbourhood page as parent.",
+    },
+    "uncle": {
+        "operator": "UNCLE",
+        "robots": "https://uncle.co.uk/robots.txt",
+        "sitemaps": ["https://uncle.co.uk/upvb_property-sitemap.xml"],
+        "include": r"^https://uncle\.co\.uk/upvb_property/[a-z0-9\-]+/$",
+        "parse": parse_text_page,
+        "rent_heuristic": True,
+        "notes": "BTR. WordPress; 13 property pages under /upvb_property/.",
+    },
+    "urbanbubble": {
+        "operator": "urbanbubble",
+        "robots": "https://urbanbubble.co.uk/robots.txt",
+        "sitemaps": ["https://urbanbubble.co.uk/projects-list-sitemap.xml"],
+        "include": r"^https://urbanbubble\.co\.uk/communities/[a-z0-9\-]+/$",
+        "parse": parse_text_page,
+        "rent_heuristic": True,
+        "notes": "BTR managing agent; /communities/<name> = managed schemes. "
+                 "Valuable for operator links even where rent absent.",
+    },
+    "essential_living": {
+        "operator": "Essential Living",
+        "robots": "https://www.essentialliving.co.uk/robots.txt",
+        "sitemaps": ["https://www.essentialliving.co.uk/sitemap.xml"],
+        "include": r"^https://www\.essentialliving\.co\.uk/developments/[a-z0-9\-]+/?$",
+        "exclude": r"/developments/?$",
+        "parse": parse_text_page,
+        "rent_heuristic": True,
+        "notes": "BTR. Kentico CMS; development pages under /developments/.",
+    },
+    "scape": {
+        "operator": "Scape",
+        "robots": "https://www.scape.com/robots.txt",
+        "sitemaps": ["https://www.scape.com/sitemap.xml"],
+        "include": r"^https://www\.scape\.com/student-accommodation-[a-z0-9\-]+/$",
+        "parse": parse_text_page,
+        "rent_heuristic": True,
+        "notes": "PBSA. Building pages /student-accommodation-<area>/.",
+    },
 }
 
 

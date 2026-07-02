@@ -8,7 +8,9 @@ at https://thearl.org.uk/arl-btr-map-with-bidwells-realyse-homeviews/.
 The map is an embedded iframe pointing to https://btr-display-dev.realyse.com/
 which is a React SPA.  The scheme data is a GeoJSON FeatureCollection embedded
 inside the Vite-built JS bundle at /assets/index-*.js.  The string data is
-obfuscated with a rotating string-array lookup pattern (Up/Fp functions).
+obfuscated with a rotating string-array lookup pattern (javascript-obfuscator
+style).  The function names change on every rebuild (Up/Fp, r2/a2, ...), so
+the extraction locates them structurally rather than by name.
 
 This scraper:
 1. Downloads the SPA entry page to discover the current JS bundle URL
@@ -152,79 +154,171 @@ class ARLBTRScraper:
     # GeoJSON extraction via Node.js
     # ------------------------------------------------------------------
 
+    _JS_IDENT = r"[A-Za-z_$][\w$]*"
+
     @staticmethod
-    def _extract_geojson_via_node(js_content: str) -> dict[str, Any]:
+    def _balanced_extract(js_content: str, start: int) -> int:
+        """
+        From the opening bracket (``{``, ``[`` or ``(``) at ``start``,
+        return the end index (exclusive) of the balanced region,
+        skipping string literals.
+        """
+        depth = 0
+        in_str = False
+        str_char = None
+        i = start
+        while i < len(js_content):
+            c = js_content[i]
+            if in_str:
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == str_char:
+                    in_str = False
+            else:
+                if c in ('"', "'", "`"):
+                    in_str = True
+                    str_char = c
+                elif c in "{[(":
+                    depth += 1
+                elif c in "}])":
+                    depth -= 1
+                    if depth == 0:
+                        return i + 1
+            i += 1
+        raise ValueError("Unbalanced brackets in JS bundle")
+
+    @classmethod
+    def _extract_geojson_via_node(cls, js_content: str) -> dict[str, Any]:
         """
         Extract the GeoJSON FeatureCollection from the obfuscated JS bundle
         by evaluating the relevant code sections with Node.js.
 
-        The bundle contains:
-        - function Up() { const n = [...]; return ... } — string array
-        - An IIFE that shuffles the array to match a checksum
-        - function Fp(n,t) — lookup function with index offset
-        - const e = Fp — alias
-        - const Bse = { type: e(...), features: [...] } — the GeoJSON data
+        The bundle contains (names change on every rebuild):
+        - const <data> = { type: <alias>(...), features: [...] } — GeoJSON
+        - <alias> = <lookup> — alias assignment (before the data constant)
+        - function <lookup>(n,t) — lookup function with index offset
+        - function <array>() { const n = [...]; ... } — string array
+          (may be hoisted AFTER the data constant in the file)
+        - An IIFE calling (<array>, <checksum>) that shuffles the array
 
-        We extract these code sections and evaluate them in Node.js.
+        Each piece is located structurally, extracted with balanced-bracket
+        scanning, and evaluated together in Node.js.
         """
-        # 1. Find the Up() function with the string array
-        func_match = re.search(r'function Up\(\)\{const n=\[', js_content)
-        if not func_match:
+        ident = cls._JS_IDENT
+
+        # 1. Find the GeoJSON data constant and the lookup alias it calls
+        data_match = re.search(
+            rf"const ({ident})=\{{type:({ident})\(\d+\)", js_content
+        )
+        if not data_match:
             raise ValueError(
-                "Could not find Up() string array function in JS bundle"
+                "Could not find GeoJSON data constant in JS bundle"
             )
-        func_start = func_match.start()
+        data_name, alias_name = data_match.group(1), data_match.group(2)
+        data_start = data_match.start()
 
-        # 2. Find the Bse GeoJSON constant
-        bse_match = re.search(r'const Bse=\{', js_content)
-        if not bse_match:
+        # 2. Find the alias assignment (e.g. ",e=a2;") before the data
+        #    constant, validating that the RHS is a declared function
+        lookup_name = None
+        lookup_code = None
+        alias_pattern = re.compile(
+            rf"(?<![\w$]){re.escape(alias_name)}=({ident})(?![\w$])"
+        )
+        for alias_match in reversed(
+            list(alias_pattern.finditer(js_content, 0, data_start))
+        ):
+            candidate = alias_match.group(1)
+            fn_decl = re.search(
+                rf"function {re.escape(candidate)}\([^)]*\)\{{", js_content
+            )
+            if fn_decl:
+                lookup_name = candidate
+                fn_end = cls._balanced_extract(
+                    js_content, js_content.index("{", fn_decl.end() - 1)
+                )
+                lookup_code = js_content[fn_decl.start():fn_end]
+                break
+        if not lookup_name or not lookup_code:
             raise ValueError(
-                "Could not find Bse GeoJSON constant in JS bundle"
+                f"Could not find lookup function for alias "
+                f"'{alias_name}' in JS bundle"
             )
-        bse_start = bse_match.start()
 
-        # 3. Extract the setup code (Up function, IIFE, Fp function, alias)
-        setup_code = js_content[func_start:bse_start]
+        # 3. The lookup function body calls the string-array function
+        array_match = re.search(rf"=\s*({ident})\(\)", lookup_code)
+        if not array_match:
+            raise ValueError(
+                f"Could not find string-array call inside lookup "
+                f"function '{lookup_name}'"
+            )
+        array_name = array_match.group(1)
+        array_decl = re.search(
+            rf"function {re.escape(array_name)}\(\)\{{", js_content
+        )
+        if not array_decl:
+            raise ValueError(
+                f"Could not find string array function "
+                f"'{array_name}' in JS bundle"
+            )
+        array_fn_end = cls._balanced_extract(
+            js_content, js_content.index("{", array_decl.end() - 1)
+        )
+        array_code = js_content[array_decl.start():array_fn_end]
 
-        # 4. Find the end of the Bse object (balanced braces/brackets)
-        bse_obj_start = bse_start + len("const Bse=")
-        brace_count = 0
-        in_str = False
-        str_char = None
-        i = bse_obj_start
-
-        while i < len(js_content):
-            c = js_content[i]
-            if c == "\\" and in_str:
-                i += 2
+        # 4. Find the shuffle IIFE: last "(function(...){...})(<array>, N)"
+        #    before the data constant
+        iife_code = None
+        for iife_match in reversed(
+            list(
+                re.finditer(r"\(function\([^)]*\)\{", js_content[:data_start])
+            )
+        ):
+            try:
+                fn_end = cls._balanced_extract(js_content, iife_match.start())
+            except ValueError:
                 continue
-            if not in_str:
-                if c in ('"', "'", "`"):
-                    in_str = True
-                    str_char = c
-                elif c in ("{", "["):
-                    brace_count += 1
-                elif c in ("}", "]"):
-                    brace_count -= 1
-                    if brace_count == 0:
-                        break
-            elif c == str_char:
-                in_str = False
-            i += 1
+            if fn_end < len(js_content) and js_content[fn_end] == "(":
+                call_end = cls._balanced_extract(js_content, fn_end)
+                if re.search(
+                    rf"\(\s*{re.escape(array_name)}\s*,",
+                    js_content[fn_end:call_end],
+                ):
+                    iife_code = js_content[iife_match.start():call_end]
+                    break
+        if not iife_code:
+            raise ValueError(
+                f"Could not find shuffle IIFE calling "
+                f"'{array_name}' in JS bundle"
+            )
 
-        bse_end = i + 1
-        bse_code = js_content[bse_start:bse_end]
+        # 5. Extract the data object (balanced braces/brackets)
+        data_obj_start = js_content.index(
+            "{", js_content.index("=", data_start)
+        )
+        data_end = cls._balanced_extract(js_content, data_obj_start)
+        data_code = js_content[data_start:data_end]
 
-        # 5. Build the Node.js evaluation script
+        # 6. Build the Node.js evaluation script
+        alias_decl = (
+            f"const {alias_name}={lookup_name};\n"
+            if alias_name != lookup_name
+            else ""
+        )
         node_script = (
-            setup_code
+            array_code
             + "\n"
-            + bse_code
+            + lookup_code
             + "\n"
-            + "process.stdout.write(JSON.stringify(Bse));\n"
+            + iife_code
+            + ";\n"
+            + alias_decl
+            + data_code
+            + ";\n"
+            + f"process.stdout.write(JSON.stringify({data_name}));\n"
         )
 
-        # 6. Write to temp file and execute with Node.js
+        # 7. Write to temp file and execute with Node.js
         with tempfile.NamedTemporaryFile(
             mode="w",
             suffix=".js",

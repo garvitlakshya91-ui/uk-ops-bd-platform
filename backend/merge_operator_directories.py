@@ -31,6 +31,10 @@ from merge_afs_schemes import DB_URL, find_council_id, find_or_create_company, f
 
 DIR = Path(__file__).parent / "data" / "operator_directories"
 
+# brands whose stock is BTR / co-living rather than PBSA
+BTR_BRANDS = {"way_of_life", "get_living", "uncle", "urbanbubble",
+              "essential_living", "quintain_living"}
+
 # admin_district / city aliases → council names as stored in our councils table
 DISTRICT_ALIASES = {
     "Bristol, City of": "Bristol",
@@ -140,16 +144,18 @@ def main():
             if args.dry_run:
                 continue
             op_id, _ = find_or_create_company(c, operator, False)
+            stype = "BTR" if r["_brand"] in BTR_BRANDS else "PBSA"
             c.execute(text("""
                 INSERT INTO existing_schemes
                     (name, address, postcode, council_id, scheme_type, status,
                      operator_company_id, source, source_reference, notes,
                      created_at, updated_at, locked_fields)
                 VALUES
-                    (:n, :a, :pc, :cid, 'PBSA', 'Operational',
+                    (:n, :a, :pc, :cid, :st, 'Operational',
                      :op, 'operator_directory', :ref, :notes,
                      NOW(), NOW(), '{}'::jsonb)
             """), {
+                "st": stype,
                 "n": name[:255],
                 "a": (r.get("address") or "")[:500],
                 "pc": postcode[:10],
