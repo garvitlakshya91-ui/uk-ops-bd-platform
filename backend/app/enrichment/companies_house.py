@@ -565,20 +565,51 @@ class CompaniesHouseEnricher:
         )
         return chain
 
+    @staticmethod
+    def _name_key(name: str) -> str:
+        """Normalise a company name for match comparison."""
+        import re as _re
+        s = _re.sub(r"[^a-z0-9 ]", " ", (name or "").lower())
+        s = _re.sub(
+            r"\b(limited|ltd|plc|llp|the|of|and|company|co|uk|group)\b", " ", s)
+        return _re.sub(r"\s+", " ", s).strip()
+
+    def _name_matches(self, ours: str, ch_title: str) -> bool:
+        """Strict gate: a CH search hit must closely match our name.
+
+        A wrong CH number silently poisons ownership chains and arrears
+        scores downstream, so an uncertain match is worse than no match.
+        """
+        from difflib import SequenceMatcher
+        a, b = self._name_key(ours), self._name_key(ch_title)
+        if not a or not b:
+            return False
+        return a == b or SequenceMatcher(None, a, b).ratio() >= 0.92
+
     async def enrich_company(self, company_name: str) -> dict[str, Any] | None:
         """End-to-end enrichment: search by name, fetch best-match details,
         and return mapped company fields.
 
-        Returns ``None`` if no match is found.
+        Returns ``None`` if no match passes the strict name gate.
         """
         results = await self.search_company(company_name, items_per_page=5)
         if not results:
             logger.info("companies_house_enrich_no_results", company_name=company_name)
             return None
 
-        # Prefer active companies; fall back to the first result.
-        best = results[0]
-        for r in results:
+        # Only consider hits whose title closely matches our name;
+        # among those, prefer active companies.
+        matches = [r for r in results
+                   if self._name_matches(company_name, r.title or "")]
+        if not matches:
+            logger.info(
+                "companies_house_enrich_no_close_match",
+                company_name=company_name,
+                top_hit=(results[0].title if results else None),
+            )
+            return None
+        best = matches[0]
+        for r in matches:
             if r.company_status and r.company_status.lower() == "active":
                 best = r
                 break

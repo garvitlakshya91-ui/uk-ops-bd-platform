@@ -35,31 +35,36 @@ celery_app.conf.update(
 
 celery_app.conf.beat_schedule = {
     # Scraping schedules
-    # NOTE: scrape-all-councils-daily temporarily PAUSED on 2026-05-30 while
-    # the standalone arrears backfill runs. Each scrape_council spawns CH
-    # lookups via enrich_company which compete with arrears for the CH
-    # rate limit (600 req / 5min). Re-enable after arrears coverage target.
-    # "scrape-all-councils-daily": {
-    #     "task": "app.tasks.scraping_tasks.scrape_all_councils",
-    #     "schedule": crontab(hour=2, minute=0),
-    #     "options": {"queue": "scraping"},
-    # },
+    # Re-enabled 2026-07-03: the standalone arrears backfill is complete.
+    "scrape-all-councils-daily": {
+        "task": "app.tasks.scraping_tasks.scrape_all_councils",
+        "schedule": crontab(hour=2, minute=0),
+        "options": {"queue": "scraping"},
+    },
     "scrape-planning-data-api-every-6h": {
         "task": "app.tasks.scraping_tasks.scrape_planning_data_api",
         "schedule": crontab(hour="*/6", minute=15),
         "options": {"queue": "scraping"},
     },
     # Enrichment schedules
-    # NOTE: enrich-new-applications-hourly temporarily PAUSED on 2026-05-30
-    # while the standalone arrears backfill is running. It was burning all
-    # 12 worker slots paging through Companies House lookups, starving the
-    # arrears queue. Re-enable by uncommenting after arrears coverage hits
-    # the target.
-    # "enrich-new-applications-hourly": {
-    #     "task": "app.tasks.enrichment_tasks.enrich_new_applications",
-    #     "schedule": crontab(minute=30),
-    #     "options": {"queue": "enrichment"},
-    # },
+    # Re-enabled 2026-07-03 at a gentler every-2-hours cadence so CH lookups
+    # don't monopolise worker slots (previous hourly cadence starved the
+    # arrears queue).
+    "enrich-new-applications-2hourly": {
+        "task": "app.tasks.enrichment_tasks.enrich_new_applications",
+        "schedule": crontab(minute=30, hour="*/2"),
+        "options": {"queue": "enrichment"},
+    },
+    # Weekly operator-health top-up: rescoring is cheap (only schemes with a
+    # CH-numbered operator/owner not checked in 90 days) and keeps the
+    # Operator Health panel fresh. Sunday early-morning, off-peak for the
+    # other CH consumers.
+    "enrich-arrears-risk-weekly": {
+        "task": "app.tasks.enrichment_tasks.enrich_arrears_risk",
+        "schedule": crontab(hour=4, minute=0, day_of_week="sunday"),
+        "kwargs": {"limit": 4000},
+        "options": {"queue": "enrichment"},
+    },
     "reverify-contacts-weekly": {
         "task": "app.tasks.enrichment_tasks.reverify_contacts",
         "schedule": crontab(hour=6, minute=0, day_of_week="monday"),
