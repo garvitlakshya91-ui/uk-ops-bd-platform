@@ -24,11 +24,13 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/schemes", tags=["AI Enrichment"])
 
-AI_MODEL = "claude-sonnet-4-20250514"
+AI_MODEL = "claude-sonnet-4-6"
 
 # Anthropic server-side web search tool
+# 20260209 version adds dynamic filtering: results are filtered server-side
+# before entering context, reducing billed input tokens per search.
 WEB_SEARCH_TOOL = {
-    "type": "web_search_20250305",
+    "type": "web_search_20260209",
     "name": "web_search",
     "max_uses": 5,
 }
