@@ -112,3 +112,5 @@ backend/data/spv_discovery/
 deck/shots/
 deck/capture_*.js
 backend/data/contracts_finder/
+backend/data/ons/
+backend/data/rsh/
