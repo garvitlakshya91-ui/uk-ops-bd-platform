@@ -858,6 +858,8 @@ class SchemeFlat(BaseModel):
     rent_tier_count: int = 0
     # Arrears (operator financial distress, 0-100; higher = more distress).
     arrears_risk_score: Optional[float] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     arrears_checked_at: Optional[str] = None
 
 
@@ -1217,6 +1219,8 @@ def list_schemes_flat(
                 asset_manager=scheme.asset_manager_company.name if hasattr(scheme, 'asset_manager_company') and scheme.asset_manager_company else None,
                 landlord=scheme.landlord_company.name if hasattr(scheme, 'landlord_company') and scheme.landlord_company else None,
                 contract_start=contract_start,
+                lat=scheme.lat if scheme.lat is not None else scheme.latitude,
+                lng=scheme.lng if scheme.lng is not None else scheme.longitude,
                 regulatory_rating=scheme.regulatory_rating,
                 financial_health=scheme.financial_health_score,
                 status=scheme.status if hasattr(scheme, 'status') else None,

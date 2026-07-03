@@ -29,10 +29,21 @@ import ActiveFilterPills from '@/components/schemes/ActiveFilterPills';
 import { getSchemesFilterOptions, SchemesFilterOptions } from '@/lib/api';
 import { SchemeOwnership, ownerTypeTone, OWNER_TYPE_BADGE, OWNER_TYPE_BAR } from '@/app/ownership/types';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AdjustmentsHorizontalIcon } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import api from '@/lib/api';
+
+// Leaflet touches `window` at import time — load client-only.
+const MiniMap = dynamic(() => import('@/components/MiniMap'), {
+  ssr: false,
+  loading: () => (
+    <div className="rounded-xl border border-white/[0.08] h-44 flex items-center justify-center bg-slate-800/40">
+      <span className="text-xs text-slate-500">Loading map…</span>
+    </div>
+  ),
+});
 
 interface SchemeRow {
   id: string;
@@ -68,6 +79,8 @@ interface SchemeRow {
   min_rent_per_week: number | null;
   rent_tier_count: number;
   region: string | null;
+  lat?: number | null;
+  lng?: number | null;
 }
 
 // Rent timeline component for scheme details
@@ -1096,6 +1109,8 @@ export default function SchemesPage() {
           asset_manager: item.asset_manager || '',
           landlord: item.landlord || '',
           contract_start: item.contract_start || '',
+          lat: item.lat ?? null,
+          lng: item.lng ?? null,
           occupancy_rate: item.occupancy_rate ?? null,
           revenue_per_unit: item.revenue_per_unit ?? null,
           score_breakdown: item.score_breakdown || {
@@ -1848,6 +1863,17 @@ export default function SchemesPage() {
                                     displayFormatter={(v) => v ? <span className={cn('font-medium', getContractEndColor(String(v)))}>{formatDate(String(v))}</span> : <span className="text-slate-600">Not set</span>} />
                                 </div>
                               </div>
+
+                              {/* Location mini-map */}
+                              {scheme.lat != null && scheme.lng != null ? (
+                                <div className="pt-1">
+                                  <MiniMap lat={scheme.lat} lng={scheme.lng} />
+                                </div>
+                              ) : (
+                                <p className="pt-1 text-xs text-slate-600">
+                                  No coordinates for this scheme yet.
+                                </p>
+                              )}
                             </div>
 
                             {/* BD Score Breakdown */}
