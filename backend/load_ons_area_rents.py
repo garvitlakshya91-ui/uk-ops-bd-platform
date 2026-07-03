@@ -33,7 +33,8 @@ DB_URL = os.environ.get(
 
 SOURCE = "ons_pipr_area"
 # LA-level ONS codes (England unitary/district/met/London, Wales, Scotland, NI)
-LA_PREFIXES = ("E06", "E07", "E08", "E09", "W06", "S12", "N09")
+# NB: the PIPR workbook uses S33* codes for Scottish council areas, not S12.
+LA_PREFIXES = ("E06", "E07", "E08", "E09", "W06", "S12", "S33", "N09")
 # (column index, label) in Table 1 — header row 3
 PRICE_COLS = [(11, "Area avg 1-bed (LA)"), (15, "Area avg 2-bed (LA)"),
               (19, "Area avg 3-bed (LA)")]
@@ -44,6 +45,30 @@ ALIASES = {
     "herefordshire, county of": "herefordshire",
     "st. helens": "st helens",
     "st. albans": "st albans",
+}
+
+# Scotland: the PIPR workbook publishes S33* Broad Rental Market Areas,
+# not council areas. Map each BRMA to the council(s) it covers.
+SCOT_BRMA_TO_COUNCILS = {
+    "aberdeen and shire": ["Aberdeen City", "Aberdeenshire"],
+    "argyll and bute": ["Argyll and Bute"],
+    "ayrshires": ["North Ayrshire", "South Ayrshire", "East Ayrshire"],
+    "dumfries and galloway": ["Dumfries and Galloway"],
+    "dundee and angus": ["Dundee City", "Angus"],
+    "east dunbartonshire": ["East Dunbartonshire"],
+    "fife": ["Fife"],
+    "forth valley": ["Falkirk", "Stirling", "Clackmannanshire"],
+    "greater glasgow": ["Glasgow City", "Renfrewshire", "East Renfrewshire",
+                        "Inverclyde", "West Dunbartonshire"],
+    "highland and islands": ["Highland", "Moray", "Na h-Eileanan Siar",
+                             "Orkney Islands", "Shetland Islands"],
+    "lothian": ["City of Edinburgh", "East Lothian", "Midlothian",
+                "West Lothian"],
+    "north lanarkshire": ["North Lanarkshire"],
+    "perth and kinross": ["Perth and Kinross"],
+    "scottish borders": ["Scottish Borders"],
+    "south lanarkshire": ["South Lanarkshire"],
+    "west lothian": ["West Lothian"],
 }
 
 
@@ -86,8 +111,16 @@ def main():
         la_rents: dict[int, list] = {}   # council_id -> [(label, pcm), ...]
         unmatched = []
         for code, r in latest.items():
-            cid = by_norm.get(norm(r[2]))
-            if not cid:
+            # Scottish BRMAs fan out to their member councils; everything
+            # else matches a single council by normalised name.
+            if str(code).startswith("S33"):
+                targets = [by_norm.get(norm(n)) for n in
+                           SCOT_BRMA_TO_COUNCILS.get((r[2] or "").lower().strip(), [])]
+                cids = [t for t in targets if t]
+            else:
+                cid = by_norm.get(norm(r[2]))
+                cids = [cid] if cid else []
+            if not cids:
                 unmatched.append(r[2])
                 continue
             vals = []
@@ -99,7 +132,8 @@ def main():
                 if pcm > 0:
                     vals.append((label, pcm, str(code)))
             if vals:
-                la_rents[cid] = vals
+                for cid in cids:
+                    la_rents.setdefault(cid, vals)
         print(f"  matched {len(la_rents):,} councils "
               f"({len(unmatched)} ONS areas unmatched)")
 
