@@ -1313,6 +1313,8 @@ export default function SchemesPage() {
           min_rent_per_week: s.min_rent_per_week ?? null,
           rent_tier_count: s.rent_tier_count ?? 0,
           region: s.region ?? null,
+          lat: s.lat ?? null,
+          lng: s.lng ?? null,
         }));
         setSchemes(items);
         setLoading(false);

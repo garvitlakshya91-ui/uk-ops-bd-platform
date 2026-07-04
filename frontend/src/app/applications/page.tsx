@@ -9,6 +9,17 @@ import SearchInput from '@/components/ui/SearchInput';
 import Select from '@/components/ui/Select';
 import PermissionGate from '@/components/rbac/PermissionGate';
 import api from '@/lib/api';
+import dynamic from 'next/dynamic';
+
+// Leaflet touches `window` at import time — load client-only.
+const MiniMap = dynamic(() => import('@/components/MiniMap'), {
+  ssr: false,
+  loading: () => (
+    <div className="rounded-xl border border-white/[0.08] h-44 flex items-center justify-center bg-slate-800/40">
+      <span className="text-xs text-slate-500">Loading map…</span>
+    </div>
+  ),
+});
 
 interface ApplicationRow {
   id: string;
@@ -25,6 +36,8 @@ interface ApplicationRow {
   description: string;
   case_officer: string;
   decision_date: string;
+  lat?: number | null;
+  lng?: number | null;
 }
 
 const defaultCouncils = [
@@ -134,6 +147,8 @@ export default function ApplicationsPage() {
           description: a.description || '',
           case_officer: a.case_officer || '',
           decision_date: a.decision_date || '',
+          lat: a.lat ?? null,
+          lng: a.lng ?? null,
         }));
         setApplications(items);
         setTotal(data?.total || items.length);
@@ -570,6 +585,15 @@ export default function ApplicationsPage() {
                                 <span className="text-slate-500">Scheme Type</span>
                                 <span><Badge variant={getSchemeTypeColor(app.type)} size="sm">{app.type}</Badge></span>
                               </div>
+
+                              {/* Location mini-map */}
+                              {app.lat != null && app.lng != null ? (
+                                <MiniMap lat={app.lat} lng={app.lng} color="#5EB1FF" />
+                              ) : (
+                                <p className="text-xs text-slate-600">
+                                  No coordinates captured for this application.
+                                </p>
+                              )}
 
                               {/* Action Buttons */}
                               <div className="flex flex-wrap gap-2 mt-4">

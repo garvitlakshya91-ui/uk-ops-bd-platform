@@ -367,6 +367,8 @@ class ApplicationFlat(BaseModel):
     description: Optional[str] = None
     case_officer: Optional[str] = None
     decision_date: Optional[str] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
 
 
 class ApplicationFlatListResponse(BaseModel):
@@ -658,6 +660,8 @@ def list_applications_flat(
                     if app.bd_score_breakdown else None
                 ),
                 description=app.description,
+                lat=getattr(app, 'latitude', None),
+                lng=getattr(app, 'longitude', None),
                 case_officer=getattr(app, 'case_officer', None),
                 decision_date=(
                     app.decision_date.isoformat()
