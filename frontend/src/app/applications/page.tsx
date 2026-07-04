@@ -20,6 +20,14 @@ const MiniMap = dynamic(() => import('@/components/MiniMap'), {
     </div>
   ),
 });
+const ApplicationsMap = dynamic(() => import('./components/ApplicationsMap'), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[70vh] rounded-2xl glass-card flex items-center justify-center">
+      <span className="text-sm text-slate-400">Loading map…</span>
+    </div>
+  ),
+});
 
 interface ApplicationRow {
   id: string;
@@ -408,18 +416,8 @@ export default function ApplicationsPage() {
         )}
       </div>
 
-      {/* Map Placeholder */}
-      {showMap && (
-        <Card>
-          <div className="flex items-center justify-center h-64 border-2 border-dashed border-slate-600 rounded-xl">
-            <div className="text-center">
-              <MapIcon className="w-12 h-12 mx-auto text-slate-500 mb-3" />
-              <p className="text-slate-400 font-medium">Map view coming soon</p>
-              <p className="text-slate-500 text-sm mt-1">Interactive map of all planning applications</p>
-            </div>
-          </div>
-        </Card>
-      )}
+      {/* Clustered map of geocoded planning applications */}
+      {showMap && <ApplicationsMap />}
 
       {/* Table */}
       <Card noPadding>
