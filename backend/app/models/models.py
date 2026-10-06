@@ -212,6 +212,14 @@ class PlanningApplication(Base):
     )
     num_units: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     total_units: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    pbsa_beds: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True,
+        comment="Student bed spaces parsed from the description (beds != units)",
+    )
+    expected_delivery_year: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True,
+        comment="Decision year + typical build time; approved/UC schemes only",
+    )
     submission_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     submitted_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     validated_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
