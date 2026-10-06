@@ -63,8 +63,10 @@ def fetch_term(client, council, term, start_date, end_date, max_pages=25):
     records = []
     for page in range(1, max_pages + 1):
         try:
+            # PlanIt's text filter is `search=`; `q=` is silently ignored
+            # (verified live: q returned generic results, search filters).
             r = client.get(PLANIT_BASE, params={
-                "auth": council, "q": term,
+                "auth": council, "search": term,
                 "start_date": start_date, "end_date": end_date,
                 "pg_sz": 200, "page": page,
             })
