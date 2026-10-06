@@ -1,0 +1,18 @@
+# SITE_ADDRESS comes from .env.production (e.g. bd.example.com).
+# Caddy provisions and renews Let's Encrypt certificates automatically,
+# provided the domain's DNS A record points at this server.
+
+{$SITE_ADDRESS} {
+	encode gzip
+
+	# FastAPI backend: API routes, OpenAPI docs
+	@backend path /api/* /docs /openapi.json /redoc
+	handle @backend {
+		reverse_proxy backend:8000
+	}
+
+	# Everything else: Next.js frontend
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

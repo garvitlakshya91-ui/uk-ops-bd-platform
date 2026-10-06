@@ -1,0 +1,101 @@
+version: "3.9"
+
+# Production stack: single-VM deployment behind Caddy (automatic HTTPS).
+# Differences from the dev compose file:
+#   - no Elasticsearch (referenced only in config, unused by the app)
+#   - no source-code volume mounts; images are immutable builds
+#   - no host-published DB/Redis ports; only Caddy touches the internet
+#   - frontend built with a relative API URL so Caddy serves one domain
+#
+# Usage: docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: uk_ops_bd
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env.production}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env.production
+    restart: unless-stopped
+
+  celery-worker:
+    build: ./backend
+    command: celery -A app.tasks:celery_app worker -l info -Q default,scraping,enrichment,scoring --concurrency=2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env.production
+    restart: unless-stopped
+
+  celery-beat:
+    build: ./backend
+    command: celery -A app.tasks:celery_app beat -l info
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env.production
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Relative URL: the browser calls https://<your-domain>/api, which
+        # Caddy routes to the backend container. No CORS involved.
+        NEXT_PUBLIC_API_URL: /api
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?set in .env.production, e.g. bd.example.com}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
