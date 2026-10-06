@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ city }} — PBSA Supply, Pipeline &amp; Ownership</title>
+<style>
+  :root {
+    --ink: #16202b; --quiet: #5c6b7a; --rule: #d9e0e7; --band: #f2f5f8;
+    --accent: #1b4f8a; --accent-soft: #dce8f5;
+  }
+  * { box-sizing: border-box; }
+  body { font: 10.5pt/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+         color: var(--ink); margin: 0; }
+  .page { padding: 20mm 16mm 26mm; page-break-after: always; }
+  tr { break-inside: avoid; }
+  .page:last-child { page-break-after: auto; }
+  h1 { font-size: 23pt; margin: 0 0 2mm; letter-spacing: -0.3pt; }
+  h2 { font-size: 13pt; margin: 0 0 4mm; padding-bottom: 1.5mm;
+       border-bottom: 2px solid var(--accent); }
+  .brand { display: flex; justify-content: space-between; align-items: baseline;
+           border-bottom: 3px solid var(--accent); padding-bottom: 3mm; margin-bottom: 8mm; }
+  .brand .logo { font-weight: 700; color: var(--accent); font-size: 11pt; }
+  .sub { color: var(--quiet); margin: 0 0 8mm; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4mm; margin: 6mm 0 10mm; }
+  .kpi { border: 1px solid var(--rule); border-top: 3px solid var(--accent);
+         border-radius: 2mm; padding: 3mm 4mm; }
+  .kpi b { display: block; font-size: 16pt; }
+  .kpi span { color: var(--quiet); font-size: 8.5pt; text-transform: uppercase;
+              letter-spacing: 0.4pt; }
+  table { width: 100%; border-collapse: collapse; font-size: 9pt; margin-bottom: 5mm; }
+  th { text-align: left; color: var(--quiet); font-size: 8pt; text-transform: uppercase;
+       letter-spacing: 0.4pt; border-bottom: 1.5px solid var(--ink); padding: 1.2mm 2mm; }
+  td { border-bottom: 1px solid var(--rule); padding: 1.3mm 2mm; vertical-align: top; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:nth-child(even) td { background: var(--band); }
+  .bar { background: var(--accent-soft); height: 4.5mm; border-radius: 1mm; position: relative; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 1mm; }
+  .note { color: var(--quiet); font-size: 8.5pt; margin: 2mm 0 6mm; }
+  .flag { color: var(--quiet); font-size: 8pt; }
+  .footer { position: fixed; bottom: 8mm; left: 16mm; right: 16mm; display: flex;
+            justify-content: space-between; color: var(--quiet); font-size: 7.5pt;
+            border-top: 1px solid var(--rule); padding-top: 1.5mm; }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 8mm; }
+  .empty { border: 1px dashed var(--rule); border-radius: 2mm; padding: 6mm;
+           color: var(--quiet); }
+</style>
+</head>
+<body>
+
+<div class="footer">
+  <span>UK Ops BD Intelligence — {{ city }} PBSA report</span>
+  <span>Generated {{ generated }} · Confidential</span>
+</div>
+
+<!-- ============================================== page 1: summary -->
+<div class="page">
+  <div class="brand">
+    <span class="logo">UK OPS BD · INTELLIGENCE</span>
+    <span class="flag">{{ generated }}</span>
+  </div>
+  <h1>{{ city }}</h1>
+  <p class="sub">Purpose-built student accommodation — supply, pipeline &amp; ownership</p>
+
+  <div class="kpis">
+    <div class="kpi"><b>{{ "{:,}".format(kpis.pbsa_beds) }}</b><span>Operational PBSA beds</span></div>
+    <div class="kpi"><b>{{ kpis.pbsa_schemes }}</b><span>Operational schemes</span></div>
+    <div class="kpi"><b>{{ kpis.operators }}</b><span>Operators identified</span></div>
+    <div class="kpi"><b>{{ "{:,}".format(kpis.pipeline_approved_beds) }}</b><span>Approved pipeline beds</span></div>
+  </div>
+
+  <h2>Operator market share</h2>
+  <table>
+    <tr><th>Operator</th><th class="num">Beds</th><th class="num">Share</th><th style="width:38%"></th></tr>
+    {% for r in operator_shares %}
+    <tr>
+      <td>{{ r.operator }}</td>
+      <td class="num">{{ "{:,}".format(r.beds) }}</td>
+      <td class="num">{{ r.share }}%</td>
+      <td><div class="bar"><i style="width: {{ [r.share * 2.2, 100] | min }}%"></i></div></td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <h2>Stock vintage</h2>
+  <table>
+    <tr><th>Build period</th><th class="num">Beds</th><th style="width:45%"></th></tr>
+    {% set vmax = vintage | map(attribute='beds') | max %}
+    {% for v in vintage %}
+    <tr>
+      <td>{{ v.band }}</td>
+      <td class="num">{{ "{:,}".format(v.beds) }}</td>
+      <td><div class="bar"><i style="width: {{ (100 * v.beds / vmax) if vmax else 0 }}%"></i></div></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<!-- ============================================== page 2: census -->
+<div class="page">
+  <h2>Scheme census — operational private PBSA</h2>
+  <p class="note">{{ census | length }} schemes. Beds are bed spaces, not units.
+  Nominations flag marks schemes let under university agreements.</p>
+  <table>
+    <tr><th>#</th><th>Scheme</th><th>Operator</th><th>Postcode</th>
+        <th class="num">Beds</th><th class="num">Built</th><th>Status</th></tr>
+    {% for r in census %}
+    <tr>
+      <td class="num">{{ loop.index }}</td>
+      <td>{{ r.name }}{% if r.nominations %} <span class="flag">· noms</span>{% endif %}</td>
+      <td>{{ r.operator or "—" }}</td>
+      <td>{{ r.postcode or "—" }}</td>
+      <td class="num">{{ "{:,}".format(r.beds) if r.beds else "—" }}</td>
+      <td class="num">{{ r.build_year or "—" }}</td>
+      <td class="flag">{{ r.operating_status | replace("_", " ") }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<!-- ============================================== page 3: pipeline -->
+<div class="page">
+  <h2>Development pipeline</h2>
+  {% if pipeline.rollup %}
+  <div class="kpis" style="grid-template-columns: repeat(3, 1fr);">
+    {% for cls in ["approved", "pending", "refused"] %}
+    {% if pipeline.rollup[cls] %}
+    <div class="kpi">
+      <b>{{ "{:,}".format(pipeline.rollup[cls].beds) }}</b>
+      <span>{{ cls }} beds · {{ pipeline.rollup[cls].schemes }} applications</span>
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+  {% if pipeline.by_delivery_year %}
+  <h2>Expected delivery (approved schemes)</h2>
+  <table>
+    <tr><th>Year</th><th class="num">Beds</th><th style="width:45%"></th></tr>
+    {% set dmax = pipeline.by_delivery_year | map(attribute=1) | max %}
+    {% for year, beds in pipeline.by_delivery_year %}
+    <tr>
+      <td>{{ year }}</td>
+      <td class="num">{{ "{:,}".format(beds) }}</td>
+      <td><div class="bar"><i style="width: {{ (100 * beds / dmax) if dmax else 0 }}%"></i></div></td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="note">Delivery years are decision date + typical build time; industry
+  convention applies a 10–20% slippage haircut to approved pipeline.</p>
+  {% endif %}
+  {% if pipeline.top %}
+  <h2>Largest live applications</h2>
+  <table>
+    <tr><th>Reference</th><th>Site</th><th>Applicant</th><th>Status</th>
+        <th class="num">Beds</th><th class="num">Est. delivery</th></tr>
+    {% for a in pipeline.top %}
+    <tr>
+      <td>{{ a.reference }}</td>
+      <td>{{ a.address }}</td>
+      <td>{{ a.applicant or "—" }}</td>
+      <td class="flag">{{ a.status }}</td>
+      <td class="num">{{ "{:,}".format(a.beds) if a.beds else "—" }}</td>
+      <td class="num">{{ a.delivery_year or "—" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% else %}
+  <div class="empty">No PBSA planning applications are loaded for {{ city }} in this
+  environment. In production this section is driven by the live planning pipeline
+  (1.35M applications across 339 authorities).</div>
+  {% endif %}
+</div>
+
+<!-- ============================================== page 4: ownership -->
+<div class="page">
+  <h2>Ownership &amp; capital</h2>
+  {% if ownership.available %}
+  <div class="twocol">
+    {% if ownership.owners %}
+    <div>
+      <h2 style="border:none; font-size: 11pt;">Registered owners by beds</h2>
+      <table>
+        <tr><th>Owner</th><th class="num">Beds</th></tr>
+        {% for r in ownership.owners %}
+        <tr><td>{{ r.owner }}</td><td class="num">{{ "{:,}".format(r.beds) }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+    {% if ownership.ultimate %}
+    <div>
+      <h2 style="border:none; font-size: 11pt;">Ultimate owners (via SPV chains)</h2>
+      <table>
+        <tr><th>Ultimate owner</th><th class="num">Schemes</th></tr>
+        {% for r in ownership.ultimate %}
+        <tr><td>{{ r.owner }}</td><td class="num">{{ r.schemes }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="empty">Ownership intelligence (SPV chains, ultimate owners, title
+  transfers) is not loaded in this environment. In production this section draws on
+  ~11,000 resolved ownership chains and 4.5M Land Registry corporate titles.</div>
+  {% endif %}
+
+  {% if kpis.btr_schemes %}
+  <p class="note">Context: the platform also tracks {{ kpis.btr_schemes }} build-to-rent
+  schemes ({{ "{:,}".format(kpis.btr_units) }} units) in {{ city }}.</p>
+  {% endif %}
+
+  <h2 style="margin-top: 8mm;">Methodology &amp; sources</h2>
+  <p class="note">
+    Scheme census assembled from operator directories, listings platforms, planning
+    records and licensed market research, verified against multiple sources per
+    scheme. Pipeline derived from local-authority planning data with bed counts
+    parsed from application text. Ownership resolved through Companies House PSC
+    chains and Land Registry corporate ownership data.
+  </p>
+  <table>
+    <tr><th>Census source</th><th class="num">Schemes</th></tr>
+    {% for source, n in source_mix %}
+    <tr><td>{{ source }}</td><td class="num">{{ n }}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="note">© UK Ops BD Intelligence. Prepared for internal / licensed use;
+  not for redistribution. Figures as at {{ generated }}.</p>
+</div>
+
+</body>
+</html>
