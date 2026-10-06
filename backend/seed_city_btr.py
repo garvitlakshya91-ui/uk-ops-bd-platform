@@ -67,8 +67,8 @@ def find_or_create_company(c, name: str) -> int | None:
     if row:
         return row[0]
     row = c.execute(text("""
-        INSERT INTO companies (name, normalized_name, created_at, updated_at)
-        VALUES (:n, :nn, NOW(), NOW())
+        INSERT INTO companies (name, normalized_name, is_active, created_at, updated_at)
+        VALUES (:n, :nn, TRUE, NOW(), NOW())
         RETURNING id
     """), {"n": name.strip()[:200], "nn": norm[:200]}).first()
     print(f"    [+] created companies row for {name!r} (id={row[0]})")

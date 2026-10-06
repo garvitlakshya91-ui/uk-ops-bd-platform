@@ -289,6 +289,11 @@ class ExistingScheme(Base):
     postcode: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Legacy duplicates of lat/lng that exist in the production schema and
+    # are read as fallbacks (e.g. frontend_adapters scheme list) — mapping
+    # them keeps fresh ORM-created databases compatible.
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     council_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("councils.id", ondelete="SET NULL"), nullable=True
     )
