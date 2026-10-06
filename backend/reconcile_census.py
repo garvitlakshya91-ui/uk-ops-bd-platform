@@ -28,53 +28,24 @@ from sqlalchemy import or_
 from app.database import SessionLocal
 from app.models.models import Company, Council, ExistingScheme
 from app.scrapers.field_protection import set_field
+from app.scrapers.scheme_matching import best_match, build_index
 
 SOURCE = "benchmark_report"
-
-STOP_TOKENS = {"the", "student", "students", "living", "accommodation", "birmingham",
-               "exeter", "halls", "hall"}
-
-
-def norm_name(name: str) -> set[str]:
-    tokens = re.sub(r"[^a-z0-9 ]", " ", (name or "").lower()).split()
-    return {t for t in tokens if t not in STOP_TOKENS and len(t) > 1}
-
-
-def norm_pc(pc: str | None) -> str:
-    return re.sub(r"\s+", "", (pc or "").upper())
-
-
-def name_score(a: set[str], b: set[str]) -> float:
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
 
 
 def match(bench_rows, ours):
     """Greedy best-match: postcode agreement + name token overlap."""
-    ours_idx = [
-        {"scheme": s, "tokens": norm_name(s.name), "pc": norm_pc(s.postcode)}
-        for s in ours
-    ]
+    index = build_index(ours)
     matched, missing = [], []
-    used = set()
+    used: set[int] = set()
     for b in bench_rows:
-        b_tokens, b_pc = norm_name(b["property"]), norm_pc(b.get("postcode"))
-        best, best_score = None, 0.0
-        for o in ours_idx:
-            if o["scheme"].id in used:
-                continue
-            score = name_score(b_tokens, o["tokens"])
-            if b_pc and o["pc"] == b_pc:
-                score += 0.5
-            if score > best_score:
-                best, best_score = o, score
-        if best is not None and best_score >= 0.5:
-            used.add(best["scheme"].id)
-            matched.append((b, best["scheme"], round(best_score, 2)))
+        scheme, score = best_match(index, b["property"], b.get("postcode"), used=used)
+        if scheme is not None:
+            used.add(scheme.id)
+            matched.append((b, scheme, score))
         else:
             missing.append(b)
-    ours_only = [o["scheme"] for o in ours_idx if o["scheme"].id not in used]
+    ours_only = [o["scheme"] for o in index if o["scheme"].id not in used]
     return matched, missing, ours_only
 
 
