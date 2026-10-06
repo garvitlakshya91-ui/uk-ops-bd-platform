@@ -799,7 +799,17 @@ class OperatorDirectoryScraper:
         if check_robots and not self.allowed(url):
             logger.info("robots_disallowed", url=url)
             return -1, None
-        if self._browser is not None and not url.endswith((".xml", ".gz", ".txt")):
+        if self._browser is not None:
+            if url.endswith((".xml", ".gz", ".txt")) or "sitemap" in url:
+                status, body = self._browser.get_bytes(url)
+                if body is None:
+                    return status, None
+                if url.endswith(".gz") or body[:2] == b"\x1f\x8b":
+                    try:
+                        body = gzip.decompress(body)
+                    except OSError:
+                        pass
+                return status, body.decode("utf-8", "replace")
             html = self._browser.get(url)
             return (200, html) if html else (None, None)
         self._throttle(url)

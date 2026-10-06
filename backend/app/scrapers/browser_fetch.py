@@ -71,6 +71,32 @@ class BrowserFetcher:
             return None
         return self._page.content()
 
+    def get_bytes(self, url: str) -> tuple[Optional[int], Optional[bytes]]:
+        """Fetch a URL and return the raw response body (sitemaps, gz).
+
+        Uses the navigation response, so the bytes are exactly what the
+        server sent even when Chromium would render the document (XML
+        viewer etc.).
+        """
+        self._ensure_started()
+        delta = time.monotonic() - self._last_req
+        if delta < self.request_interval_sec:
+            time.sleep(self.request_interval_sec - delta)
+        self._last_req = time.monotonic()
+        try:
+            r = self._page.goto(url, timeout=self.timeout_ms,
+                                wait_until="domcontentloaded")
+        except Exception as exc:
+            logger.warning("browser_fetch_error", url=url, error=str(exc)[:120])
+            return None, None
+        if r is None:
+            return None, None
+        try:
+            return r.status, r.body()
+        except Exception as exc:
+            logger.warning("browser_body_error", url=url, error=str(exc)[:120])
+            return r.status, None
+
     def close(self):
         for obj in (self._browser, self._pw):
             try:
