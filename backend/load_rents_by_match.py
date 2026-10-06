@@ -33,6 +33,7 @@ from app.scrapers.scheme_matching import best_match, build_index
 
 AFS = "afs_directory"
 ST = "sturents"
+OP = "operator_directory"
 
 
 def read_jsonl(path: str) -> list[dict]:
@@ -54,6 +55,22 @@ def afs_rents(rec: dict) -> list[dict]:
         "source": AFS,
         "source_reference": rec.get("url"),
     }]
+
+
+def opdir_rents(rec: dict) -> list[dict]:
+    out = []
+    for label, wk in [("From (advertised)", rec.get("rent_ppw_min")),
+                      ("To (advertised)", rec.get("rent_ppw_max"))]:
+        if wk:
+            out.append({
+                "room_type": label,
+                "rent_per_week": float(wk),
+                "source": OP,
+                "source_reference": rec.get("url"),
+            })
+    if len(out) == 2 and out[0]["rent_per_week"] == out[1]["rent_per_week"]:
+        out = out[:1]
+    return out
 
 
 def sturents_rents(rec: dict) -> list[dict]:
@@ -79,6 +96,9 @@ def main() -> None:
     ap.add_argument("--city", required=True, help="Council name")
     ap.add_argument("--afs", nargs="*", default=[])
     ap.add_argument("--sturents", nargs="*", default=[])
+    ap.add_argument("--opdir", nargs="*", default=[],
+                    help="Operator-directory brand JSONLs (all cities; "
+                         "filtered to records whose city matches --city)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -93,12 +113,18 @@ def main() -> None:
     )
     print(f"{args.city}: matching against {len(index)} schemes")
 
-    pending: dict[str, list[tuple[int, dict]]] = {AFS: [], ST: []}
+    pending: dict[str, list[tuple[int, dict]]] = {AFS: [], ST: [], OP: []}
     unmatched = 0
-    sources = [(AFS, args.afs, afs_rents), (ST, args.sturents, sturents_rents)]
+    city_lower = args.city.lower()
+    sources = [(AFS, args.afs, afs_rents), (ST, args.sturents, sturents_rents),
+               (OP, args.opdir, opdir_rents)]
     for source, files, to_rents in sources:
         for path in files:
             for rec in read_jsonl(path):
+                # Brand files span every city the operator trades in; only
+                # the requested city's records may match its schemes.
+                if source == OP and city_lower not in (rec.get("city") or "").lower():
+                    continue
                 rents = to_rents(rec)
                 if not rents:
                     continue

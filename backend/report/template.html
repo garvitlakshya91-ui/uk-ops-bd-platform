@@ -102,7 +102,8 @@
   Nominations flag marks schemes let under university agreements.</p>
   <table>
     <tr><th>#</th><th>Scheme</th><th>Operator</th><th>Postcode</th>
-        <th class="num">Beds</th><th class="num">Built</th><th>Status</th></tr>
+        <th class="num">Beds</th><th class="num">Built</th>
+        <th class="num">From £/wk</th><th>Status</th></tr>
     {% for r in census %}
     <tr>
       <td class="num">{{ loop.index }}</td>
@@ -111,10 +112,31 @@
       <td>{{ r.postcode or "—" }}</td>
       <td class="num">{{ "{:,}".format(r.beds) if r.beds else "—" }}</td>
       <td class="num">{{ r.build_year or "—" }}</td>
+      <td class="num">{{ "%.0f" | format(r.from_rent_ppw) if r.from_rent_ppw else "—" }}</td>
       <td class="flag">{{ r.operating_status | replace("_", " ") }}</td>
     </tr>
     {% endfor %}
   </table>
+  <p class="note">Advertised from-rents captured {{ generated }} ({{ rent_coverage }} of
+  {{ census | length }} schemes); room-level tiers accumulate with each quarterly capture.</p>
+
+  {% if university_stock %}
+  <h2>University-owned stock</h2>
+  <table>
+    <tr><th>Property</th><th>University</th><th class="num">Beds</th></tr>
+    {% for r in university_stock %}
+    <tr>
+      <td>{{ r.name }}</td>
+      <td>{{ r.university or "—" }}</td>
+      <td class="num">{{ "{:,}".format(r.beds) if r.beds else "—" }}</td>
+    </tr>
+    {% endfor %}
+    <tr>
+      <td><b>Total</b></td><td></td>
+      <td class="num"><b>{{ "{:,}".format(university_stock | sum(attribute="beds")) }}</b></td>
+    </tr>
+  </table>
+  {% endif %}
 </div>
 
 <!-- ============================================== page 3: pipeline -->

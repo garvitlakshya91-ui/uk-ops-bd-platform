@@ -76,15 +76,39 @@ def main() -> None:
         raise SystemExit(f"Council {args.council!r} not found")
     council_id = row[0]
 
+    def variants(ref: str) -> list[str]:
+        """Cleaned lookup candidates for a possibly dirty reference."""
+        import re as _re
+        base = _re.sub(r"[^0-9A-Za-z/]", "", ref).upper()
+        out = [base]
+        if _re.fullmatch(r"\d{4}/\d{3,6}", base):
+            out.append(base + "/PA")
+        if base.endswith("/PA"):
+            out.append(base[:-3])
+        return list(dict.fromkeys(out))
+
     saved = updated = missing = 0
     with httpx.Client(timeout=30.0, headers=UA) as client, engine.connect() as c:
         for ref in refs:
-            try:
-                r = client.get(PLANIT, params={"auth": args.council, "id_match": ref})
-            except Exception as exc:
-                print(f"  {ref}: ERR {exc}")
-                continue
-            recs = r.json().get("records", []) if r.status_code == 200 else []
+            recs = []
+            for cand in variants(ref):
+                for attempt in range(3):
+                    try:
+                        r = client.get(PLANIT, params={"auth": args.council,
+                                                       "id_match": cand})
+                    except Exception as exc:
+                        print(f"  {cand}: ERR {exc}")
+                        break
+                    if r.status_code == 429:
+                        wait = min(int(r.headers.get("Retry-After", "30")), 120)
+                        print(f"  {cand}: 429, waiting {wait}s")
+                        time.sleep(wait)
+                        continue
+                    recs = r.json().get("records", []) if r.status_code == 200 else []
+                    break
+                if recs:
+                    break
+                time.sleep(0.4)
             if not recs:
                 print(f"  {ref}: not found on PlanIt")
                 missing += 1

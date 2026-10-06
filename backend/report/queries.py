@@ -52,18 +52,44 @@ def gather_city_context(db: Session, council_name: str) -> dict:
         raise SystemExit(f"Council {council_name!r} not found")
 
     # ------------------------------------------------------------- census
-    schemes = (
+    all_pbsa = (
         db.query(ExistingScheme)
         .filter(ExistingScheme.council_id == council.id,
                 ExistingScheme.scheme_type == "PBSA")
         .all()
     )
-    operators = {
-        c.id: c.name for c in db.query(Company).filter(
-            Company.id.in_([s.operator_company_id for s in schemes
+    operator_rows = {
+        c.id: c for c in db.query(Company).filter(
+            Company.id.in_([s.operator_company_id for s in all_pbsa
                             if s.operator_company_id] or [0])
         )
     }
+    operators = {cid: c.name for cid, c in operator_rows.items()}
+
+    def _is_university(s: ExistingScheme) -> bool:
+        op = operator_rows.get(s.operator_company_id)
+        return op is not None and (op.company_type or "") == "University"
+
+    schemes = [s for s in all_pbsa if not _is_university(s)]
+    university_stock = sorted((
+        {
+            "name": s.name,
+            "university": operators.get(s.operator_company_id),
+            "postcode": s.postcode,
+            "beds": _beds(s),
+        }
+        for s in all_pbsa if _is_university(s)
+    ), key=lambda r: -r["beds"])
+
+    # Cheapest current advertised rent per scheme (append-only rows)
+    rent_rows = db.execute(text("""
+        SELECT scheme_id, MIN(rent_per_week) FROM scheme_rents
+        WHERE is_current AND rent_per_week IS NOT NULL
+          AND scheme_id = ANY(:sids)
+        GROUP BY scheme_id
+    """), {"sids": [s.id for s in all_pbsa] or [0]}).fetchall()
+    min_rent = {r[0]: r[1] for r in rent_rows}
+
     census = sorted((
         {
             "name": s.name,
@@ -73,6 +99,7 @@ def gather_city_context(db: Session, council_name: str) -> dict:
             "build_year": s.build_year,
             "operating_status": s.operating_status or "live",
             "nominations": bool(s.nominations),
+            "from_rent_ppw": min_rent.get(s.id),
         }
         for s in schemes
     ), key=lambda r: -r["beds"])
@@ -204,6 +231,8 @@ def gather_city_context(db: Session, council_name: str) -> dict:
             "btr_units": sum(_beds(s) or 0 for s in btr),
         },
         "operator_shares": operator_shares,
+        "university_stock": university_stock,
+        "rent_coverage": len([r for r in census if r["from_rent_ppw"]]),
         "vintage": vintage,
         "pipeline": pipeline,
         "ownership": ownership,
