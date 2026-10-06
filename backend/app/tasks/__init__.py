@@ -46,6 +46,15 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour="*/6", minute=15),
         "options": {"queue": "scraping"},
     },
+    # Quarterly rent capture — the observation that builds the matched
+    # rent panel (append-only). November is the industry pricing window:
+    # Nov / Feb / May / Aug, early on the 10th, off-peak.
+    "capture-rents-quarterly": {
+        "task": "app.tasks.scraping_tasks.capture_rents_quarterly",
+        "schedule": crontab(hour=3, minute=0, day_of_month="10",
+                            month_of_year="2,5,8,11"),
+        "options": {"queue": "scraping"},
+    },
     # Enrichment schedules
     # Re-enabled 2026-07-03 at a gentler every-2-hours cadence so CH lookups
     # don't monopolise worker slots (previous hourly cadence starved the

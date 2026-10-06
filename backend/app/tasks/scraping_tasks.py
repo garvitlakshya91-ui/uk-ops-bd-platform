@@ -1623,3 +1623,35 @@ def _load_scraper(scraper_class_name: str | None, council: Council | None) -> An
 
     # For API-based scrapers, pass council directly if accepted.
     return cls()
+
+
+@celery_app.task(name="app.tasks.scraping_tasks.capture_rents_quarterly")
+def capture_rents_quarterly() -> dict[str, Any]:
+    """Quarterly rent capture across the report cities.
+
+    Runs capture_rents.sh per city (AFS, StuRents via browser, operator
+    directories, Unite, append-only attachment, AI room tiers when a key
+    is configured). Cities come from REPORT_CITIES, a comma-separated
+    list of Council:slug pairs; defaults to the Birmingham pilot.
+    """
+    import os
+    import subprocess
+
+    pairs = os.environ.get("REPORT_CITIES", "Birmingham:birmingham")
+    script = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))), "capture_rents.sh")
+    results: dict[str, Any] = {}
+    for pair in [p.strip() for p in pairs.split(",") if p.strip()]:
+        council, _, slug = pair.partition(":")
+        slug = slug or council.lower()
+        proc = subprocess.run(
+            ["bash", script, council, slug],
+            capture_output=True, text=True, timeout=4 * 3600,
+        )
+        results[council] = {
+            "returncode": proc.returncode,
+            "tail": proc.stdout[-1500:],
+        }
+        logger.info("rent_capture_city_done", city=council,
+                    returncode=proc.returncode)
+    return results

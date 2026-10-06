@@ -738,7 +738,7 @@ class OperatorDirectoryScraper:
     request_interval_sec = 1.1
     max_pages_default = 400
 
-    def __init__(self, timeout: float = 30.0):
+    def __init__(self, timeout: float = 30.0, use_browser: bool = False):
         self.timeout = timeout
         self.client = httpx.Client(
             timeout=timeout,
@@ -747,12 +747,20 @@ class OperatorDirectoryScraper:
         )
         self._last_req: dict[str, float] = {}
         self._robots: dict[str, robotparser.RobotFileParser] = {}
+        # Cloudflare-protected brands 403 plain HTTP but serve Chromium.
+        self._browser = None
+        if use_browser:
+            from app.scrapers.browser_fetch import BrowserFetcher
+            self._browser = BrowserFetcher(
+                request_interval_sec=self.request_interval_sec)
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
         self.client.close()
+        if self._browser is not None:
+            self._browser.close()
 
     # -- politeness --------------------------------------------------------
 
@@ -791,6 +799,9 @@ class OperatorDirectoryScraper:
         if check_robots and not self.allowed(url):
             logger.info("robots_disallowed", url=url)
             return -1, None
+        if self._browser is not None and not url.endswith((".xml", ".gz", ".txt")):
+            html = self._browser.get(url)
+            return (200, html) if html else (None, None)
         self._throttle(url)
         try:
             r = self.client.get(url, timeout=timeout or self.timeout)

@@ -97,19 +97,28 @@ class SturentsScraper:
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     )
 
-    def __init__(self, timeout: float = 30.0):
+    def __init__(self, timeout: float = 30.0, use_browser: bool = False):
         self.client = httpx.Client(
             timeout=timeout,
             headers={"User-Agent": self.user_agent},
             follow_redirects=True,
         )
         self._last_req = 0.0
+        # StuRents bot-blocks plain HTTP on listing detail pages; a real
+        # Chromium passes (verified 2026-10-06).
+        self._browser = None
+        if use_browser:
+            from app.scrapers.browser_fetch import BrowserFetcher
+            self._browser = BrowserFetcher(
+                request_interval_sec=self.request_interval_sec)
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
         self.client.close()
+        if self._browser is not None:
+            self._browser.close()
 
     def _throttle(self):
         delta = time.monotonic() - self._last_req
@@ -118,6 +127,8 @@ class SturentsScraper:
         self._last_req = time.monotonic()
 
     def get(self, url: str) -> Optional[str]:
+        if self._browser is not None:
+            return self._browser.get(url)
         self._throttle()
         try:
             r = self.client.get(url)

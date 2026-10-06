@@ -37,6 +37,8 @@ def main() -> int:
     ap.add_argument("--all", action="store_true", help="scrape every configured brand")
     ap.add_argument("--limit", type=int, default=None,
                     help="cap property pages per brand (for parser testing)")
+    ap.add_argument("--browser", action="store_true",
+                    help="Fetch pages via headless Chromium (CF bypass)")
     args = ap.parse_args()
 
     if not args.brand and not args.all:
@@ -46,7 +48,7 @@ def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     rows = []
-    with OperatorDirectoryScraper() as scraper:
+    with OperatorDirectoryScraper(use_browser=args.browser) as scraper:
         for brand in brands:
             try:
                 result = scraper.scrape_brand(brand, limit=args.limit)

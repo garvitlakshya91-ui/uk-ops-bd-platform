@@ -53,6 +53,8 @@ def main():
     ap.add_argument("--city", help="Single city slug to scrape")
     ap.add_argument("--all", action="store_true", help="All 16 focus cities")
     ap.add_argument("--limit", type=int, help="Max listings per city (pilot)")
+    ap.add_argument("--browser", action="store_true",
+                    help="Fetch via headless Chromium (bot-protection bypass)")
     ap.add_argument("--skip-done", action="store_true",
                     help="Skip cities whose JSONL already exists")
     args = ap.parse_args()
@@ -62,7 +64,7 @@ def main():
 
     cities = [args.city] if args.city else FOCUS_CITY_SLUGS
     results = []
-    with SturentsScraper() as scraper:
+    with SturentsScraper(use_browser=args.browser) as scraper:
         for city in cities:
             if args.skip_done and (OUT_DIR / f"{city}.jsonl").exists():
                 print(f"[skip] {city} (already scraped)")
