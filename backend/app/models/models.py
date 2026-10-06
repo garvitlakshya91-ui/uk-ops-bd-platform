@@ -315,6 +315,22 @@ class ExistingScheme(Base):
         comment="operational, under_construction, planned, decommissioned",
     )
     num_units: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Legacy duplicate of num_units present in the production schema.
+    total_units: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Census fields (reports product). Beds are not units: a PBSA cluster
+    # flat is one unit with several beds, and reports trade in beds.
+    beds_total: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, comment="PBSA bed spaces, distinct from units"
+    )
+    build_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    nominations: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True,
+        comment="Let under a university nominations/lease agreement",
+    )
+    operating_status: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True,
+        comment="live, closed, no_letting_presence, nominations_only",
+    )
     contract_start_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     contract_end_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     performance_rating: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

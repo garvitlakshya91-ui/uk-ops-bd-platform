@@ -1,0 +1,1183 @@
+{
+ "city": "Exeter",
+ "producer": "Student Source",
+ "report_date": "2024-01",
+ "license_note": "Licensed client report data. Internal benchmark/QA use only \u2014 never republish these figures.",
+ "private_stock": [
+  {
+   "property": "Bonhay House",
+   "operator": "Collegiate AC",
+   "postcode": "EX44BG",
+   "beds": 31,
+   "build_year": null,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "King Edward Studios",
+   "operator": "Collegiate AC",
+   "postcode": "EX4 4NA",
+   "beds": 64,
+   "build_year": 2016,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Point Exe",
+   "operator": "Collegiate AC",
+   "postcode": "EX4 4BT",
+   "beds": 221,
+   "build_year": null,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "The Neighbourhood Exeter",
+   "operator": "Collegiate AC",
+   "postcode": "EX4 3BH",
+   "beds": 127,
+   "build_year": 2019,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Condor Properties",
+   "operator": "Molly Hayes Apartments",
+   "postcode": null,
+   "beds": 46,
+   "build_year": null,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Boutique Student Living",
+   "operator": "CRM Students",
+   "postcode": "EX4 6SG",
+   "beds": 82,
+   "build_year": 2023,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Central Living",
+   "operator": "CRM Students",
+   "postcode": "EX1 2JY",
+   "beds": 120,
+   "build_year": 2020,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "The City Arcade",
+   "operator": "CRM Students",
+   "postcode": "EX1 1BL",
+   "beds": 64,
+   "build_year": 2020,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Downing Students",
+   "operator": "The Kingfisher",
+   "postcode": "EX1 2FJ",
+   "beds": 203,
+   "build_year": 2016,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "East Of Exe",
+   "operator": "The Leat Apartments",
+   "postcode": "EX4 3ff",
+   "beds": 27,
+   "build_year": 2017,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Cricket Field Court",
+   "operator": "Fresh Student Living",
+   "postcode": "EX4 4FU",
+   "beds": 159,
+   "build_year": 2016,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Queen Street Studios",
+   "operator": "Fresh Student Living",
+   "postcode": "EX4 3FG",
+   "beds": 130,
+   "build_year": 2017,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "The Barn",
+   "operator": "Fresh Student Living",
+   "postcode": "EX1 2FQ",
+   "beds": 150,
+   "build_year": 2018,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Clifton Place",
+   "operator": "Hello Student",
+   "postcode": "EX4 3PT",
+   "beds": 61,
+   "build_year": 2015,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Dean Clarke Lofts",
+   "operator": "Hello Student",
+   "postcode": "EX1 1SG",
+   "beds": 30,
+   "build_year": 2014,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Library Lofts",
+   "operator": "Hello Student",
+   "postcode": "EX4 3PT",
+   "beds": 61,
+   "build_year": 2015,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Picturehouse Apartments",
+   "operator": "Hello Student",
+   "postcode": "EX4 6PH",
+   "beds": 103,
+   "build_year": 2014,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "The Depot",
+   "operator": "Here Students",
+   "postcode": "EX1 2FW",
+   "beds": 599,
+   "build_year": 2019,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Atlas House",
+   "operator": "HFS - Homes For Students",
+   "postcode": "EX1 2FR",
+   "beds": 75,
+   "build_year": 2018,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Exeter One",
+   "operator": "HFS - Homes For Students",
+   "postcode": "EX4 5AD",
+   "beds": 219,
+   "build_year": 2010,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Iron Bridge Studios",
+   "operator": "HFS - Homes For Students",
+   "postcode": "EX4 3EU",
+   "beds": 130,
+   "build_year": 2012,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "West Gate",
+   "operator": "HFS - Prestige Student Living",
+   "postcode": "EX1 1FE",
+   "beds": 98,
+   "build_year": 2018,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Hill View Place",
+   "operator": "HFS - Prestige Student Living",
+   "postcode": "EX4 4GZ",
+   "beds": 226,
+   "build_year": 2022,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Renslade House",
+   "operator": "HFS - Prestige Student Living",
+   "postcode": "EX4 3AY",
+   "beds": 268,
+   "build_year": 2019,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Northernhay House",
+   "operator": "Host Students",
+   "postcode": "EX4 3RY",
+   "beds": 218,
+   "build_year": 1999,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "The Northfield",
+   "operator": "Host Students",
+   "postcode": "EX4 4FB",
+   "beds": 183,
+   "build_year": null,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "The Printworks",
+   "operator": "Host Students",
+   "postcode": "EX1 2ZT",
+   "beds": 492,
+   "build_year": 2013,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Trust House",
+   "operator": "Host Students",
+   "postcode": "EX4 6TZ",
+   "beds": 124,
+   "build_year": 2009,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Verney Street Studios",
+   "operator": "Project Student",
+   "postcode": "EX1 2AW",
+   "beds": 29,
+   "build_year": 2017,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Bishop Blackall School",
+   "operator": "Student Cribs",
+   "postcode": "EX4 6BP",
+   "beds": 113,
+   "build_year": 2011,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Isca Lofts",
+   "operator": "Student Cribs",
+   "postcode": "EX4 6AW",
+   "beds": 71,
+   "build_year": 2008,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Study Inn Walnut Garden Exeter",
+   "operator": "Study Inn",
+   "postcode": "EX4 4DH",
+   "beds": 167,
+   "build_year": 2021,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Portland House - Vita Student",
+   "operator": "Vita Student",
+   "postcode": "EX4 6AB",
+   "beds": 156,
+   "build_year": 2014,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  },
+  {
+   "property": "Clifford House",
+   "operator": "Yugo",
+   "postcode": "EX4 6AQ",
+   "beds": 312,
+   "build_year": 2019,
+   "captured": null,
+   "nominations": false,
+   "no_letting_presence": false,
+   "notes": null
+  }
+ ],
+ "university_stock": [
+  {
+   "university": "University of Exeter",
+   "property": "A Block",
+   "campus": "Birks Grange",
+   "postcode": "EX4 4PQ",
+   "beds": 65
+  },
+  {
+   "university": "University of Exeter",
+   "property": "B Block",
+   "campus": "Birks Grange",
+   "postcode": "EX4 4PQ",
+   "beds": 95
+  },
+  {
+   "university": "University of Exeter",
+   "property": "C Block",
+   "campus": "Birks Grange",
+   "postcode": "EX4 4PQ",
+   "beds": 103
+  },
+  {
+   "university": "University of Exeter",
+   "property": "D Block",
+   "campus": "Birks Grange",
+   "postcode": "EX4 4PQ",
+   "beds": 32
+  },
+  {
+   "university": "University of Exeter",
+   "property": "E Block",
+   "campus": "Birks Grange",
+   "postcode": "EX4 4PQ",
+   "beds": 65
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Studios",
+   "campus": "Birks Grange",
+   "postcode": "EX4 4PQ",
+   "beds": 4
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block F",
+   "campus": "Birks Grange Village",
+   "postcode": "EX4 4GA",
+   "beds": 143
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block G",
+   "campus": "Birks Grange Village",
+   "postcode": "EX4 4GA",
+   "beds": 96
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block J",
+   "campus": "Birks Grange Village",
+   "postcode": "EX4 4GA",
+   "beds": 112
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block K",
+   "campus": "Birks Grange Village",
+   "postcode": "EX4 4GA",
+   "beds": 48
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block L",
+   "campus": "Birks Grange Village",
+   "postcode": "EX4 4GA",
+   "beds": 67
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block M",
+   "campus": "Birks Grange Village",
+   "postcode": "EX4 4GA",
+   "beds": 83
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block N",
+   "campus": "Birks Grange Village",
+   "postcode": "EX4 4GA",
+   "beds": 48
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block P",
+   "campus": "Birks Grange Village",
+   "postcode": "EX4 4GA",
+   "beds": 60
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block Q",
+   "campus": "Birks Grange Village",
+   "postcode": "EX4 4BG",
+   "beds": 47
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Ross House (Block H)",
+   "campus": "Birks Grange Village",
+   "postcode": "EX4 4GA",
+   "beds": 128
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Cook Mews",
+   "campus": "Cook Mews",
+   "postcode": "EX4 4NY",
+   "beds": 40
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Teign House",
+   "campus": "Duryard",
+   "postcode": "EX4 4GQ",
+   "beds": 112
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Yeo House",
+   "campus": "Duryard",
+   "postcode": "EX4 4GN",
+   "beds": 82
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block A",
+   "campus": "East Park",
+   "postcode": "EX4 4GX",
+   "beds": 96
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block B",
+   "campus": "East Park",
+   "postcode": "EX4 4GX",
+   "beds": 40
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block C",
+   "campus": "East Park",
+   "postcode": "EX4 4GX",
+   "beds": 46
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block D",
+   "campus": "East Park",
+   "postcode": "EX4 4GX",
+   "beds": 48
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block E",
+   "campus": "East Park",
+   "postcode": "EX4 4GX",
+   "beds": 116
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block F",
+   "campus": "East Park",
+   "postcode": "EX4 4GX",
+   "beds": 143
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block G",
+   "campus": "East Park",
+   "postcode": "EX4 4GX",
+   "beds": 152
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block H",
+   "campus": "East Park",
+   "postcode": "EX4 4GX",
+   "beds": 115
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block J",
+   "campus": "East Park",
+   "postcode": "EX4 4GX",
+   "beds": 113
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block K",
+   "campus": "East Park",
+   "postcode": "EX4 4GX",
+   "beds": 53
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Block L",
+   "campus": "East Park",
+   "postcode": "EX4 4GX",
+   "beds": 260
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Garden Hill House",
+   "campus": "Garden Hill House",
+   "postcode": "EX4 4SG",
+   "beds": 21
+  },
+  {
+   "university": "University of Exeter",
+   "property": "A Block",
+   "campus": "Holland Hall",
+   "postcode": "EX4 4SA",
+   "beds": 72
+  },
+  {
+   "university": "University of Exeter",
+   "property": "B Block",
+   "campus": "Holland Hall",
+   "postcode": "EX4 4SA",
+   "beds": 78
+  },
+  {
+   "university": "University of Exeter",
+   "property": "C Block",
+   "campus": "Holland Hall",
+   "postcode": "EX4 4SA",
+   "beds": 70
+  },
+  {
+   "university": "University of Exeter",
+   "property": "D Block",
+   "campus": "Holland Hall",
+   "postcode": "EX4 4SA",
+   "beds": 68
+  },
+  {
+   "university": "University of Exeter",
+   "property": "E Block",
+   "campus": "Holland Hall",
+   "postcode": "EX4 4SA",
+   "beds": 95
+  },
+  {
+   "university": "University of Exeter",
+   "property": "F Block",
+   "campus": "Holland Hall",
+   "postcode": "EX4 4SA",
+   "beds": 23
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Holland Hall Studios",
+   "campus": "Holland Hall Studios",
+   "postcode": "EX4 4SA",
+   "beds": 16
+  },
+  {
+   "university": "University of Exeter",
+   "property": "A Block",
+   "campus": "James Owen Court",
+   "postcode": "EX4 6SD",
+   "beds": 48
+  },
+  {
+   "university": "University of Exeter",
+   "property": "B Block",
+   "campus": "James Owen Court",
+   "postcode": "EX4 6SD",
+   "beds": 14
+  },
+  {
+   "university": "University of Exeter",
+   "property": "C Block",
+   "campus": "James Owen Court",
+   "postcode": "EX4 6SD",
+   "beds": 52
+  },
+  {
+   "university": "University of Exeter",
+   "property": "D Block",
+   "campus": "James Owen Court",
+   "postcode": "EX4 6SD",
+   "beds": 70
+  },
+  {
+   "university": "University of Exeter",
+   "property": "E Block",
+   "campus": "James Owen Court",
+   "postcode": "EX4 6SD",
+   "beds": 37
+  },
+  {
+   "university": "University of Exeter",
+   "property": "F Block",
+   "campus": "James Owen Court",
+   "postcode": "EX4 6SD",
+   "beds": 19
+  },
+  {
+   "university": "University of Exeter",
+   "property": "G Block",
+   "campus": "James Owen Court",
+   "postcode": "EX4 6SD",
+   "beds": 35
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Double Bedroom  Flat (7)",
+   "campus": "King Edward Court",
+   "postcode": "EX4 4NY",
+   "beds": 7
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Single Bedroom  Flat (1)",
+   "campus": "King Edward Court",
+   "postcode": "EX4 4NA",
+   "beds": 1
+  },
+  {
+   "university": "University of Exeter",
+   "property": "B Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 95
+  },
+  {
+   "university": "University of Exeter",
+   "property": "C Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 95
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Caradon House G Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 4TJ",
+   "beds": 48
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Caradon House H Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 44
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Crantock  House E Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 44
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Crantock  House F Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 48
+  },
+  {
+   "university": "University of Exeter",
+   "property": "D Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 95
+  },
+  {
+   "university": "University of Exeter",
+   "property": "J Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 63
+  },
+  {
+   "university": "University of Exeter",
+   "property": "K Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 95
+  },
+  {
+   "university": "University of Exeter",
+   "property": "L Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 87
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Ma Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 63
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Mb Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 63
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Penwith  House Q Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 44
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Penwith  House R Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 43
+  },
+  {
+   "university": "University of Exeter",
+   "property": "S Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 65
+  },
+  {
+   "university": "University of Exeter",
+   "property": "T Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 86
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Zennor House N Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 43
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Zennor House P Block",
+   "campus": "Lafrowda",
+   "postcode": "EX4 6TJ",
+   "beds": 41
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Lafrowda Cottage",
+   "campus": "Lafrowda Cottage",
+   "postcode": "EX4 4PR",
+   "beds": 5
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Llewellyn  Mews",
+   "campus": "Llewellyn  Mews",
+   "postcode": "EX4 4NY",
+   "beds": 40
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Main House",
+   "campus": "Lopes Hall",
+   "postcode": "EX4 6TH",
+   "beds": 57
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Pennsylvania Court A Block",
+   "campus": "Lopes Hall",
+   "postcode": "EX4 4TP",
+   "beds": 27
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Pennsylvania Court B Block",
+   "campus": "Lopes Hall",
+   "postcode": "EX4 4TP",
+   "beds": 35
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Pennsylvania Court C Block",
+   "campus": "Lopes Hall",
+   "postcode": "EX4 4TP",
+   "beds": 27
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Pennsylvania Court D Block",
+   "campus": "Lopes Hall",
+   "postcode": "EX4 4TP",
+   "beds": 26
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Pennsylvania Court E Block",
+   "campus": "Lopes Hall",
+   "postcode": "EX4 4TP",
+   "beds": 26
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Pennsylvania Court F Block",
+   "campus": "Lopes Hall",
+   "postcode": "EX4 4TP",
+   "beds": 36
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Ransom Pickard",
+   "campus": "Lopes Hall",
+   "postcode": "EX4 6TN",
+   "beds": 64
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Mardon Hall",
+   "campus": "Mardon Hall",
+   "postcode": "EX4 4QW",
+   "beds": 77
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Moberly",
+   "campus": "Moberly",
+   "postcode": "EX4 4QS",
+   "beds": 251
+  },
+  {
+   "university": "University of Exeter",
+   "property": "A Block",
+   "campus": "Nash Grove",
+   "postcode": "EX4 4QX",
+   "beds": 18
+  },
+  {
+   "university": "University of Exeter",
+   "property": "B Block",
+   "campus": "Nash Grove",
+   "postcode": "EX4 4QX",
+   "beds": 18
+  },
+  {
+   "university": "University of Exeter",
+   "property": "C Block",
+   "campus": "Nash Grove",
+   "postcode": "EX4 4QX",
+   "beds": 18
+  },
+  {
+   "university": "University of Exeter",
+   "property": "D Block",
+   "campus": "Nash Grove",
+   "postcode": "EX4 4QX",
+   "beds": 15
+  },
+  {
+   "university": "University of Exeter",
+   "property": "E Block",
+   "campus": "Nash Grove",
+   "postcode": "EX4 4QX",
+   "beds": 12
+  },
+  {
+   "university": "University of Exeter",
+   "property": "F Block",
+   "campus": "Nash Grove",
+   "postcode": "EX4 4QX",
+   "beds": 12
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Davies House",
+   "campus": "Rowancroft",
+   "postcode": "EX1 2EZ",
+   "beds": 37
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Francis House",
+   "campus": "Rowancroft",
+   "postcode": "EX1 2AQ",
+   "beds": 83
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Garden House",
+   "campus": "Rowancroft",
+   "postcode": "EX4 6TJ",
+   "beds": 14
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Radford  House",
+   "campus": "Rowancroft",
+   "postcode": "EX1 2AP",
+   "beds": 53
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Studios",
+   "campus": "Rowancroft",
+   "postcode": "EX1 2FD",
+   "beds": 31
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Rowancroft Court Flats",
+   "campus": "Rowancroft Court",
+   "postcode": "EX4 2QH",
+   "beds": 48
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Rowancroft Mews",
+   "campus": "Rowancroft Mews",
+   "postcode": "EX4 2QH",
+   "beds": 70
+  },
+  {
+   "university": "University of Exeter",
+   "property": "S and T Block",
+   "campus": "Rowe House",
+   "postcode": "EX4 6TJ",
+   "beds": 56
+  },
+  {
+   "university": "University of Exeter",
+   "property": "W and X Block",
+   "campus": "Rowe House",
+   "postcode": "EX4 6TJ",
+   "beds": 41
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Y and Z Block",
+   "campus": "Rowe House",
+   "postcode": "EX4 6TJ",
+   "beds": 42
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Spreytonway",
+   "campus": "Spreytonway",
+   "postcode": "EX4 4GX",
+   "beds": 131
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Chagford",
+   "campus": "St Germans",
+   "postcode": "EX4 6TJ",
+   "beds": 36
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Christow",
+   "campus": "St Germans",
+   "postcode": "EX4 6TJ",
+   "beds": 36
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Lydford",
+   "campus": "St Germans",
+   "postcode": "EX4 6TJ",
+   "beds": 36
+  },
+  {
+   "university": "University of Exeter",
+   "property": "Widecombe",
+   "campus": "St Germans",
+   "postcode": "EX4 6TJ",
+   "beds": 36
+  },
+  {
+   "university": "University of Exeter",
+   "property": "New Nancherrow",
+   "campus": "St Lukes",
+   "postcode": "EX1 2LU",
+   "beds": 14
+  }
+ ],
+ "pipeline": [
+  {
+   "site": "Former Johnsons Laundry Site",
+   "address": "Cowley Bridge Road",
+   "postcode": "EX4 5AD",
+   "planning_ref": "23/0232/FUL",
+   "status": "Planning Approved",
+   "status_checked": "15.1.2024",
+   "build_status": null,
+   "operator_clue": "No detail established",
+   "developer": "MDS (Exeter) Ltd",
+   "architect": null,
+   "sector": "Private Sector",
+   "beds": 350,
+   "beds_approved": 350,
+   "studios": null,
+   "delivery_year": 2025
+  },
+  {
+   "site": "26 - 28 Longbrook Street",
+   "address": null,
+   "postcode": "EX4 6AE",
+   "planning_ref": "22/0507/NMA",
+   "status": "Planning Approved",
+   "status_checked": "15.1.2024",
+   "build_status": null,
+   "operator_clue": "No detail established",
+   "developer": "Regen - ACE Student Living Limited",
+   "architect": null,
+   "sector": "Private Sector",
+   "beds": 97,
+   "beds_approved": 97,
+   "studios": null,
+   "delivery_year": 2025
+  },
+  {
+   "site": "Beaufort House",
+   "address": "51 New North Road",
+   "postcode": "EX4 4EP",
+   "planning_ref": "22/1531/FUL",
+   "status": "Planning Approved",
+   "status_checked": "15.1.2024",
+   "build_status": null,
+   "operator_clue": "Campbell Property UK Ltd",
+   "developer": "Campbell Property UK Ltd",
+   "architect": null,
+   "sector": "Private Sector",
+   "beds": 105,
+   "beds_approved": 105,
+   "studios": null,
+   "delivery_year": 2025
+  },
+  {
+   "site": "Former Police Station",
+   "address": "Heavitree Road",
+   "postcode": "EX1 2LS",
+   "planning_ref": "21/1564/OUT",
+   "status": "Planning - Refused",
+   "status_checked": "15.1.2024",
+   "build_status": null,
+   "operator_clue": null,
+   "developer": "Nixon Homes",
+   "architect": null,
+   "sector": "Private Sector",
+   "beds": null,
+   "beds_approved": null,
+   "studios": null,
+   "delivery_year": null
+  },
+  {
+   "site": "Clarendon House",
+   "address": "Western Way",
+   "postcode": "EX1 2DA",
+   "planning_ref": null,
+   "status": "Proposal",
+   "status_checked": "15.1.2024",
+   "build_status": null,
+   "operator_clue": null,
+   "developer": "Zinc Real Estate",
+   "architect": null,
+   "sector": "Private Sector",
+   "beds": null,
+   "beds_approved": null,
+   "studios": null,
+   "delivery_year": null
+  }
+ ],
+ "hesa": [
+  {
+   "institution": "The University of Exeter",
+   "full_time_students": {
+    "2020-21": 28615,
+    "2019-20": 26900,
+    "2018-19": 24420,
+    "2017-18": 22945,
+    "2016-17": 22065
+   }
+  }
+ ],
+ "totals": {
+  "private_beds": 5159,
+  "private_schemes": 34,
+  "university_beds": 6028,
+  "pipeline_beds": 552,
+  "pipeline_sites": 5
+ }
+}

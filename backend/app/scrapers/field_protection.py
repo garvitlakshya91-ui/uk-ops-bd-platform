@@ -39,6 +39,9 @@ SOURCE_PRECEDENCE: dict[str, int] = {
     "manual": 100,
     "hmlr_ccod": 80,
     "companies_house": 80,
+    # Licensed market-research packs (Student Source etc.): human-verified
+    # published data — above scrapers, below our own manual verification.
+    "benchmark_report": 70,
     "arl_btr": 60,
     "arl_btr_open_operating": 60,
     "epc_new_dwelling": 60,
@@ -91,6 +94,11 @@ WRITABLE_FIELDS: set[str] = PROTECTED_FIELDS | {
     "satisfaction_score",
     "regulatory_rating",
     "financial_health_score",
+    # Census fields (reports product)
+    "beds_total",
+    "build_year",
+    "nominations",
+    "operating_status",
 }
 
 _SCHEME_TYPE_ENUM = {"BTR", "PBSA", "Co-living", "Senior Living", "Residential", "Mixed-use"}
