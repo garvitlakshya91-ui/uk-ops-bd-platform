@@ -629,6 +629,90 @@ class SchemeRent(Base):
     )
 
 
+class Institution(Base):
+    """A higher-education institution mapped to the council where its
+    students actually live — the demand side of every market report."""
+
+    __tablename__ = "institutions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    ukprn: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    council_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("councils.id", ondelete="SET NULL"), nullable=True
+    )
+    city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    demand_adjustment: Mapped[float] = mapped_column(
+        Float, nullable=False, default=1.0, server_default="1.0",
+        comment="Share of FT students who study in this city "
+                "(multi-campus correction, e.g. Exeter ex-Penryn ~0.81)",
+    )
+    campus_notes: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    enrolments: Mapped[List["HesaEnrolment"]] = relationship(
+        "HesaEnrolment", back_populates="institution",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (Index("ix_institutions_council", "council_id"),)
+
+
+class HesaEnrolment(Base):
+    """Full-time student numbers per institution per academic year."""
+
+    __tablename__ = "hesa_enrolments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    institution_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("institutions.id", ondelete="CASCADE"), nullable=False
+    )
+    academic_year: Mapped[str] = mapped_column(
+        String(10), nullable=False, comment="e.g. 2023-24"
+    )
+    full_time_students: Mapped[int] = mapped_column(Integer, nullable=False)
+    level: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="all", server_default="all"
+    )
+    source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    institution: Mapped["Institution"] = relationship(
+        "Institution", back_populates="enrolments"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("institution_id", "academic_year", "level",
+                         name="uq_hesa_inst_year_level"),
+    )
+
+
+class MaintenanceLoan(Base):
+    """SLC maximum maintenance loan by academic year and living situation."""
+
+    __tablename__ = "maintenance_loans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    academic_year: Mapped[str] = mapped_column(String(10), nullable=False)
+    region: Mapped[str] = mapped_column(
+        String(30), nullable=False,
+        comment="outside_london / london / parental_home",
+    )
+    max_loan_gbp: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("academic_year", "region", name="uq_loan_year_region"),
+    )
+
+
 class PipelineOpportunity(Base):
     __tablename__ = "pipeline_opportunities"
 

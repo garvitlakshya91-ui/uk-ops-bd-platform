@@ -14,6 +14,7 @@ from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from app.models.models import Company, Council, ExistingScheme, PlanningApplication
+from report.demand import affordability, balance_scenarios, gather_demand_context
 
 APPROVED_RE = re.compile(r"approv|permit|grant|consent", re.I)
 PENDING_RE = re.compile(r"submit|pending|regist|await|valid|consult", re.I)
@@ -212,6 +213,19 @@ def gather_city_context(db: Session, council_name: str) -> dict:
         .all()
     )
 
+    # ------------------------------------------------------------- demand
+    demand = gather_demand_context(db, council.id)
+    balance = afford = None
+    if demand and demand["adjusted_students"]:
+        uni_beds = sum(r["beds"] for r in university_stock)
+        approved = pipeline["rollup"].get("approved", {}).get("beds", 0)
+        pending = pipeline["rollup"].get("pending", {}).get("beds", 0)
+        balance = balance_scenarios(
+            demand["adjusted_students"], total_beds + uni_beds,
+            approved, approved + pending,
+        )
+        afford = affordability(db, council.id, demand["max_loan"])
+
     # ------------------------------------------------------------ sources
     source_mix = defaultdict(int)
     for s in schemes:
@@ -235,6 +249,9 @@ def gather_city_context(db: Session, council_name: str) -> dict:
         "rent_coverage": len([r for r in census if r["from_rent_ppw"]]),
         "vintage": vintage,
         "pipeline": pipeline,
+        "demand": demand,
+        "balance": balance,
+        "afford": afford,
         "ownership": ownership,
         "source_mix": sorted(source_mix.items(), key=lambda kv: -kv[1]),
     }

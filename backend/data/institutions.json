@@ -1,0 +1,39 @@
+[
+  {
+    "name": "The University of Birmingham",
+    "aliases": ["University of Birmingham"],
+    "council": "Birmingham",
+    "city": "Birmingham"
+  },
+  {
+    "name": "Aston University",
+    "council": "Birmingham",
+    "city": "Birmingham"
+  },
+  {
+    "name": "Birmingham City University",
+    "aliases": ["BCU"],
+    "council": "Birmingham",
+    "city": "Birmingham"
+  },
+  {
+    "name": "Newman University",
+    "aliases": ["Newman University Birmingham", "Birmingham Newman University"],
+    "council": "Birmingham",
+    "city": "Birmingham"
+  },
+  {
+    "name": "University College Birmingham",
+    "aliases": ["UCB"],
+    "council": "Birmingham",
+    "city": "Birmingham"
+  },
+  {
+    "name": "The University of Exeter",
+    "aliases": ["University of Exeter"],
+    "council": "Exeter",
+    "city": "Exeter",
+    "demand_adjustment": 0.81,
+    "campus_notes": "~19% of FT students study at the Penryn (Cornwall) campus and are excluded from Exeter city demand"
+  }
+]

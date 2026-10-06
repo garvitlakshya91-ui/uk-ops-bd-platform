@@ -193,6 +193,77 @@
   {% endif %}
 </div>
 
+<!-- ====================================== page: demand & balance -->
+{% if demand %}
+<div class="page">
+  <h2>Student demand &amp; market balance</h2>
+  <div class="kpis">
+    <div class="kpi"><b>{{ "{:,}".format(demand.adjusted_students) }}</b>
+      <span>FT students, {{ demand.latest_year }}</span></div>
+    {% if balance %}
+    <div class="kpi"><b>{{ balance.ratio_now }}</b>
+      <span>Beds per student, current</span></div>
+    <div class="kpi"><b>{{ balance.ratio_approved }}</b>
+      <span>With approved pipeline</span></div>
+    {% endif %}
+    {% if afford %}
+    <div class="kpi"><b>{{ afford.above_pct }}%</b>
+      <span>Rent rows above max loan</span></div>
+    {% endif %}
+  </div>
+
+  <h2>Full-time students by institution</h2>
+  <table>
+    <tr><th>Institution</th>
+      {% for y in demand.years %}<th class="num">{{ y }}</th>{% endfor %}
+    </tr>
+    {% for r in demand.table %}
+    <tr>
+      <td>{{ r.institution }}{% if r.adjustment != 1.0 %} <span class="flag">· ×{{ r.adjustment }}</span>{% endif %}</td>
+      {% for y in demand.years %}
+      <td class="num">{{ "{:,}".format(r.years[y]) if r.years[y] else "—" }}</td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+    <tr>
+      <td><b>City total</b></td>
+      {% for y in demand.years %}
+      <td class="num"><b>{{ "{:,}".format(demand.totals[y]) }}</b></td>
+      {% endfor %}
+    </tr>
+  </table>
+  <p class="note">Source: HESA full-time enrolments ({{ demand.sources | join(", ") }}).
+  ×-factors are campus adjustments: the share of an institution's students who study
+  in {{ city }}.</p>
+
+  {% if balance %}
+  <h2>Balance scenarios — beds per student in {{ balance.horizon }} years</h2>
+  <table>
+    <tr><th>Demand growth p.a.</th>
+      {% for c in balance.cases %}<th class="num">{{ c }}</th>{% endfor %}
+    </tr>
+    {% for row in balance.grid %}
+    <tr>
+      <td>{{ row.growth }}</td>
+      {% for cell in row.cells %}<td class="num">{{ cell.ratio }}</td>{% endfor %}
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="note">Beds = private + university PBSA. Pipeline cases take parsed bed
+  counts only; outline consents without stated bed numbers are excluded, so pipeline
+  cases are conservative.</p>
+  {% endif %}
+
+  {% if afford %}
+  <h2>Affordability</h2>
+  <p>The maximum maintenance loan outside London ({{ demand.loan_year }}) is
+  £{{ "{:,}".format(afford.max_loan) }} — £{{ afford.weekly_loan }}/week over a
+  51-week tenancy. {{ afford.above_pct }}% of the {{ afford.rows }} advertised rent
+  rows captured this quarter exceed the full loan, before any other living costs.</p>
+  {% endif %}
+</div>
+{% endif %}
+
 <!-- ============================================== page 4: ownership -->
 <div class="page">
   <h2>Ownership &amp; capital</h2>
