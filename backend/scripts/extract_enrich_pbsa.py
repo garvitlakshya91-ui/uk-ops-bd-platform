@@ -30,8 +30,8 @@ from app.models.models import (
     Company,
     ExistingScheme,
     SchemeChangeLog,
-    SchemeRent,
 )
+from app.models.rent_history import record_rent
 from app.api.ai_enrichment import (
     _call_claude,
     _build_suggestions,
@@ -130,32 +130,21 @@ def apply_extract_ai(
     for r in rents:
         if r.confidence < min_confidence:
             continue
-        existing = (
-            db.query(SchemeRent)
-            .filter(
-                SchemeRent.scheme_id == scheme.id,
-                SchemeRent.room_type == r.room_type,
-                SchemeRent.academic_year == r.academic_year,
-            )
-            .first()
+        # Append-only upsert: supersedes the prior ai_enrichment row
+        # for this tier instead of overwriting it.
+        outcome = record_rent(
+            db,
+            scheme_id=scheme.id,
+            source="ai_enrichment",
+            room_type=r.room_type,
+            academic_year=r.academic_year,
+            rent_per_week=r.rent_per_week,
+            rent_per_month=r.rent_per_month,
+            currency=r.currency or "GBP",
+            contract_length_weeks=r.contract_length_weeks,
         )
-        if existing:
-            if r.rent_per_week is not None:
-                existing.rent_per_week = r.rent_per_week
-            if r.rent_per_month is not None:
-                existing.rent_per_month = r.rent_per_month
-        else:
-            db.add(SchemeRent(
-                scheme_id=scheme.id,
-                room_type=r.room_type,
-                rent_per_week=r.rent_per_week,
-                rent_per_month=r.rent_per_month,
-                currency=r.currency or "GBP",
-                academic_year=r.academic_year,
-                contract_length_weeks=r.contract_length_weeks,
-                source="ai_enrichment",
-            ))
-        rents_saved += 1
+        if outcome != "unchanged":
+            rents_saved += 1
 
     try:
         db.commit()

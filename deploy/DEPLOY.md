@@ -41,6 +41,13 @@ docker compose -f docker-compose.prod.yml exec postgres \
 docker compose -f docker-compose.prod.yml restart backend celery-worker celery-beat
 ```
 
+Then bring the restored schema up to date (the dump predates recent
+migrations, e.g. 009 rent history):
+
+```bash
+docker compose -f docker-compose.prod.yml exec backend alembic upgrade head
+```
+
 ## 4. Verify
 
 - `https://<SITE_ADDRESS>/docs` — API up

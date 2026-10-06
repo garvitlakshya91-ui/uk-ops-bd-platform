@@ -1091,6 +1091,7 @@ def list_schemes_flat(
             sa_func.min(SchemeRent.rent_per_week).label("min_rent_wk"),
             sa_func.count(SchemeRent.id).label("rent_count"),
         )
+        .filter(SchemeRent.is_current.is_(True))
         .group_by(SchemeRent.scheme_id)
         .subquery()
     )
@@ -1166,7 +1167,10 @@ def list_schemes_flat(
                 sa_func.min(SchemeRent.rent_per_week),
                 sa_func.count(SchemeRent.id),
             )
-            .filter(SchemeRent.scheme_id.in_(scheme_ids))
+            .filter(
+                SchemeRent.scheme_id.in_(scheme_ids),
+                SchemeRent.is_current.is_(True),
+            )
             .group_by(SchemeRent.scheme_id)
             .all()
         )
@@ -1459,21 +1463,28 @@ class SchemeRentFlat(BaseModel):
     contract_length_weeks: Optional[int] = None
     source: Optional[str] = None
     scraped_at: Optional[str] = None
+    is_current: bool = True
 
 
 @router.get("/v2/schemes/{scheme_id}/rents", response_model=list[SchemeRentFlat])
 def get_scheme_rents(
     scheme_id: int,
+    include_history: bool = False,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return all rent tiers for a given scheme, cheapest first."""
+    """Return a scheme's current rent tiers, cheapest first.
+
+    ``include_history=true`` also returns superseded observations,
+    newest first within each tier — the raw rent time series."""
+    query = db.query(SchemeRent).filter(SchemeRent.scheme_id == scheme_id)
+    if not include_history:
+        query = query.filter(SchemeRent.is_current.is_(True))
     rents = (
-        db.query(SchemeRent)
-        .filter(SchemeRent.scheme_id == scheme_id)
-        .order_by(
+        query.order_by(
             SchemeRent.academic_year.desc().nullslast(),
             SchemeRent.rent_per_week.asc().nullslast(),
+            SchemeRent.scraped_at.desc(),
         )
         .all()
     )
@@ -1488,6 +1499,7 @@ def get_scheme_rents(
             contract_length_weeks=r.contract_length_weeks,
             source=r.source,
             scraped_at=r.scraped_at.isoformat() if r.scraped_at else None,
+            is_current=r.is_current,
         )
         for r in rents
     ]

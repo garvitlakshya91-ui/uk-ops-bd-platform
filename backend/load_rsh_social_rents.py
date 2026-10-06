@@ -78,8 +78,12 @@ def main():
         """)).fetchall()
 
         if not args.dry_run:
-            c.execute(text("DELETE FROM scheme_rents WHERE source = :s"),
-                      {"s": SOURCE})
+            # Append-only: supersede, never delete — keeps the yearly
+            # RSH settlement series.
+            c.execute(text("""
+                UPDATE scheme_rents SET is_current = FALSE, superseded_at = NOW()
+                WHERE is_current AND source = :s
+            """), {"s": SOURCE})
 
         for sid, cid, owner in schemes:
             if matches_any(owner, EXCLUDE_PATTERNS) or not matches_any(owner, HA_PATTERNS):

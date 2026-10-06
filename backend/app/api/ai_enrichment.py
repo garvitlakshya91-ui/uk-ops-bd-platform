@@ -774,36 +774,23 @@ def apply_ai_suggestions(
     # Also persist any rent suggestions the user accepted (via body.rents)
     rents_saved = 0
     if getattr(body, "rents", None):
-        from app.models.models import SchemeRent
+        from app.models.rent_history import record_rent
         for r in body.rents:
-            # Upsert on (scheme_id, room_type, academic_year)
-            existing_rent = (
-                db.query(SchemeRent)
-                .filter(
-                    SchemeRent.scheme_id == scheme_id,
-                    SchemeRent.room_type == r.room_type,
-                    SchemeRent.academic_year == r.academic_year,
-                )
-                .first()
+            # Append-only upsert: supersedes the prior ai_enrichment row
+            # for this tier instead of overwriting it (or any scraped row).
+            outcome = record_rent(
+                db,
+                scheme_id=scheme_id,
+                source="ai_enrichment",
+                room_type=r.room_type,
+                academic_year=r.academic_year,
+                rent_per_week=r.rent_per_week,
+                rent_per_month=r.rent_per_month,
+                currency=r.currency or "GBP",
+                contract_length_weeks=r.contract_length_weeks,
             )
-            if existing_rent:
-                if r.rent_per_week is not None:
-                    existing_rent.rent_per_week = r.rent_per_week
-                if r.rent_per_month is not None:
-                    existing_rent.rent_per_month = r.rent_per_month
-                existing_rent.source = "ai_enrichment"
-            else:
-                db.add(SchemeRent(
-                    scheme_id=scheme_id,
-                    room_type=r.room_type,
-                    rent_per_week=r.rent_per_week,
-                    rent_per_month=r.rent_per_month,
-                    currency=r.currency or "GBP",
-                    academic_year=r.academic_year,
-                    contract_length_weeks=r.contract_length_weeks,
-                    source="ai_enrichment",
-                ))
-            rents_saved += 1
+            if outcome != "unchanged":
+                rents_saved += 1
 
     db.commit()
 

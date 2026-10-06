@@ -168,9 +168,11 @@ def main():
         return
 
     with engine.begin() as c:
-        c.execute(text(
-            "DELETE FROM scheme_rents WHERE source = :s AND scheme_id = ANY(:ids)"
-        ), {"s": SOURCE, "ids": list({p["sid"] for p in payload})})
+        # Append-only: supersede only the re-scraped schemes' rows.
+        c.execute(text("""
+            UPDATE scheme_rents SET is_current = FALSE, superseded_at = NOW()
+            WHERE is_current AND source = :s AND scheme_id = ANY(:ids)
+        """), {"s": SOURCE, "ids": list({p["sid"] for p in payload})})
         for p in payload:
             c.execute(text("""
                 INSERT INTO scheme_rents

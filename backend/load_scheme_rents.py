@@ -10,7 +10,8 @@ never became schemes simply don't match (correct).
 Rents are normalised to per-week and per-month. Ranges (min/max) become
 two rows ("From" / "To"); single advertised rents become one row.
 
-Idempotent: clears the three source labels it owns, then reloads.
+Re-runnable: supersedes (is_current = false) the three source labels it
+owns, then inserts fresh rows — prior observations are kept as history.
 
 Usage:
     python load_scheme_rents.py --dry-run
@@ -198,8 +199,11 @@ def main():
         return
 
     with engine.begin() as c:
-        c.execute(text("DELETE FROM scheme_rents WHERE source IN (:a,:b,:d)"),
-                  {"a": AFS, "b": OP, "d": ST})
+        # Append-only: supersede, never delete — history is the product.
+        c.execute(text("""
+            UPDATE scheme_rents SET is_current = FALSE, superseded_at = NOW()
+            WHERE is_current AND source IN (:a,:b,:d)
+        """), {"a": AFS, "b": OP, "d": ST})
         for p in payload:
             c.execute(text("""
                 INSERT INTO scheme_rents

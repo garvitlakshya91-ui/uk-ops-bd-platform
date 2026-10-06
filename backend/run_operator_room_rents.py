@@ -106,16 +106,17 @@ def main():
         return
     with engine.begin() as c:
         existing = c.execute(text(
-            "SELECT COUNT(*) FROM scheme_rents WHERE source = :s"),
+            "SELECT COUNT(*) FROM scheme_rents WHERE source = :s AND is_current"),
             {"s": source}).scalar()
         if existing and len(rows) < existing * 0.5:
-            print(f"ABORT: new scrape ({len(rows)} rows) is <50% of existing "
+            print(f"ABORT: new scrape ({len(rows)} rows) is <50% of current "
                   f"({existing}) — parser likely degraded; not replacing.")
             return
-        # replace only the schemes we re-scraped, keep the rest
+        # Append-only: supersede only the schemes we re-scraped; prior
+        # observations stay as history, untouched schemes stay current.
         c.execute(text("""
-            DELETE FROM scheme_rents WHERE source = :s
-            AND scheme_id = ANY(:sids)
+            UPDATE scheme_rents SET is_current = FALSE, superseded_at = NOW()
+            WHERE is_current AND source = :s AND scheme_id = ANY(:sids)
         """), {"s": source, "sids": list({r["sid"] for r in rows})})
         for r in rows:
             c.execute(text("""

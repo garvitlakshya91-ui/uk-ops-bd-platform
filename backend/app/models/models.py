@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     JSON,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -532,9 +533,13 @@ class SchemeChangeLog(Base):
 
 
 class SchemeRent(Base):
-    """Rent tier for a scheme. A scheme has 1-N rent rows, one per
-    room type / academic year. BTR schemes typically have one tier per
-    unit type; PBSA schemes have multiple (studio, classic studio, etc.)."""
+    """Rent observation for a scheme. Append-only: rows are never deleted
+    or overwritten. A re-scrape marks prior rows for the same source
+    ``is_current = false`` (superseded) and inserts fresh ones, so the
+    table accumulates the rent time series the reports product sells.
+    Readers wanting "the rents" filter on ``is_current``; the history of
+    a tier is the superseded rows matched on (scheme_id, room_type,
+    sub_classification, source)."""
 
     __tablename__ = "scheme_rents"
 
@@ -564,6 +569,18 @@ class SchemeRent(Base):
     source_reference: Mapped[Optional[str]] = mapped_column(
         String(500), nullable=True, comment="Source URL or ref",
     )
+    sub_classification: Mapped[Optional[str]] = mapped_column(
+        String(150), nullable=True,
+        comment="Operator tier within a room type (Classic, Gold, Platinum, "
+        "'price per person in 2-bed'); part of the year-over-year match key",
+    )
+    is_current: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true(),
+        comment="False once a newer observation from the same source exists",
+    )
+    superseded_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     scraped_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -578,6 +595,8 @@ class SchemeRent(Base):
     __table_args__ = (
         Index("ix_scheme_rents_scheme_id", "scheme_id"),
         Index("ix_scheme_rents_scheme_room", "scheme_id", "room_type"),
+        Index("ix_scheme_rents_current", "scheme_id", "is_current"),
+        Index("ix_scheme_rents_source_current", "source", "is_current"),
     )
 
 

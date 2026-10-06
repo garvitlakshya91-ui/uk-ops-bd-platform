@@ -149,8 +149,12 @@ def main():
         print(f"  {len(schemes):,} rent-less BTR/Senior/Co-living schemes")
 
         if not args.dry_run:
-            c.execute(text("DELETE FROM scheme_rents WHERE source = :s"),
-                      {"s": SOURCE})
+            # Append-only: supersede, never delete — each monthly ONS
+            # load becomes a point in the area-rent series.
+            c.execute(text("""
+                UPDATE scheme_rents SET is_current = FALSE, superseded_at = NOW()
+                WHERE is_current AND source = :s
+            """), {"s": SOURCE})
 
         for sid, cid, no_avg in schemes:
             vals = la_rents.get(cid)
