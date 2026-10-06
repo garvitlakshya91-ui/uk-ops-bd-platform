@@ -122,7 +122,8 @@ def gather_city_context(db: Session, council_name: str) -> dict:
         beds = a.pbsa_beds or 0
         pipe_rollup[cls]["schemes"] += 1
         pipe_rollup[cls]["beds"] += beds
-        if cls == "approved" and a.expected_delivery_year:
+        if (cls == "approved" and a.expected_delivery_year
+                and a.expected_delivery_year >= datetime.date.today().year):
             by_delivery[a.expected_delivery_year] += beds
     top_apps = sorted(
         (a for a in apps if classify_status(a.status, a.decision) != "refused"),

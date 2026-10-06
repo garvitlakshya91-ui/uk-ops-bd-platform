@@ -1,636 +1,294 @@
 {
  "city": "Birmingham",
  "benchmark": "birmingham_student_source_jan26.json",
- "matched": [],
- "missing_from_ours": [
+ "matched": [
   {
-   "property": "Beech Gardens",
-   "operator": "Almero Student",
-   "postcode": "B15 2NL",
-   "beds": 236,
-   "build_year": 1933,
-   "captured": "29.10.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Beech Gardens",
+   "scheme_id": 89,
+   "score": 1.5
   },
   {
-   "property": "Calthorpe Court",
-   "operator": "Homes For Students",
-   "postcode": "B5 7QF",
-   "beds": 337,
-   "build_year": 1993,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Calthorpe Court",
+   "scheme_id": 90,
+   "score": 1.5
   },
   {
-   "property": "University Park (Oakbrook Park)",
-   "operator": "Unite Students",
-   "postcode": "B29 6BL",
-   "beds": 656,
-   "build_year": 1999,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "University Park (Oakbrook Park)",
+   "scheme_id": 91,
+   "score": 1.5
   },
   {
-   "property": "The Heights",
-   "operator": "Canvas Student",
-   "postcode": "B4 7DR",
-   "beds": 909,
-   "build_year": 2004,
-   "captured": "18.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "The Heights",
+   "scheme_id": 92,
+   "score": 1.5
   },
   {
-   "property": "Studios 51",
-   "operator": "iQ Student Accommodation",
-   "postcode": "B4 7AG",
-   "beds": 150,
-   "build_year": 2006,
-   "captured": "7.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Studios 51",
+   "scheme_id": 93,
+   "score": 1.5
   },
   {
-   "property": "Belgrave View",
-   "operator": "Campus Living Villages",
-   "postcode": "B5 7AJ",
-   "beds": 604,
-   "build_year": 2007,
-   "captured": "10.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Belgrave View",
+   "scheme_id": 94,
+   "score": 1.5
   },
   {
-   "property": "iQ Broderick House",
-   "operator": "iQ Student Accommodation",
-   "postcode": "B15 1NQ",
-   "beds": 460,
-   "build_year": 2007,
-   "captured": "7.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "iQ Broderick House",
+   "scheme_id": 95,
+   "score": 1.5
   },
   {
-   "property": "Jennens Court",
-   "operator": "Now Students",
-   "postcode": "B5 5JR",
-   "beds": 596,
-   "build_year": 2008,
-   "captured": "10.12.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Jennens Court",
+   "scheme_id": 96,
+   "score": 1.5
   },
   {
-   "property": "Bagot Street Birmingham",
-   "operator": "Collegiate AC",
-   "postcode": "B4 7AY",
-   "beds": 1148,
-   "build_year": 2011,
-   "captured": "18.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Bagot Street Birmingham",
+   "scheme_id": 97,
+   "score": 1.5
   },
   {
-   "property": "The Pavillion",
-   "operator": "Allied Student Accommodation",
-   "postcode": "B15 1LJ",
-   "beds": 147,
-   "build_year": 2013,
-   "captured": "2.12.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "The Pavillion",
+   "scheme_id": 98,
+   "score": 1.5
   },
   {
-   "property": "The Metalworks",
-   "operator": "Homes For Students",
-   "postcode": "B15 2GG",
-   "beds": 434,
-   "build_year": 2013,
-   "captured": "N/a",
-   "nominations": true,
-   "no_letting_presence": false,
-   "notes": "Nominations"
+   "benchmark": "The Metalworks",
+   "scheme_id": 99,
+   "score": 1.5
   },
   {
-   "property": "iQ Penworks House",
-   "operator": "iQ Student Accommodation",
-   "postcode": "B4 7AS",
-   "beds": 432,
-   "build_year": 2013,
-   "captured": "7.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "iQ Penworks House",
+   "scheme_id": 100,
+   "score": 1.5
   },
   {
-   "property": "Brook Studios",
-   "operator": "Hello Student",
-   "postcode": "B29 6BD",
-   "beds": 106,
-   "build_year": 2014,
-   "captured": "24.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Brook Studios",
+   "scheme_id": 101,
+   "score": 1.5
   },
   {
-   "property": "Cadnam Hall",
-   "operator": "Premier Student Halls",
-   "postcode": "B17 0PX",
-   "beds": 146,
-   "build_year": 2014,
-   "captured": "2.1.26",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Cadnam Hall",
+   "scheme_id": 102,
+   "score": 1.5
   },
   {
-   "property": "The Old Fire Station",
-   "operator": "Canvas Student",
-   "postcode": "B4 7DD",
-   "beds": 463,
-   "build_year": 2015,
-   "captured": "18.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "The Old Fire Station",
+   "scheme_id": 103,
+   "score": 1.5
   },
   {
-   "property": "Edge Apartments",
-   "operator": "Hello Student",
-   "postcode": "B29 6BD",
-   "beds": 77,
-   "build_year": 2015,
-   "captured": "24.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Edge Apartments",
+   "scheme_id": 104,
+   "score": 1.5
   },
   {
-   "property": "Lucas  Studios",
-   "operator": "Homes For Students",
-   "postcode": "B4 7DD",
-   "beds": 62,
-   "build_year": 2015,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Lucas  Studios",
+   "scheme_id": 105,
+   "score": 1.5
   },
   {
-   "property": "Selly Oak Court",
-   "operator": "Homes For Students",
-   "postcode": "B29 6GH",
-   "beds": 331,
-   "build_year": 2015,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Selly Oak Court",
+   "scheme_id": 106,
+   "score": 1.5
   },
   {
-   "property": "Kensington House",
-   "operator": "Prime Student Living",
-   "postcode": "B1 1LN",
-   "beds": 132,
-   "build_year": 2015,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Kensington House",
+   "scheme_id": 107,
+   "score": 1.5
   },
   {
-   "property": "Athena Studios",
-   "operator": "Unite Students",
-   "postcode": "B5 7SN",
-   "beds": 259,
-   "build_year": 2015,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Athena Studios",
+   "scheme_id": 108,
+   "score": 1.5
   },
   {
-   "property": "B16 Studios",
-   "operator": "Almero Student",
-   "postcode": "B16 8LT",
-   "beds": 137,
-   "build_year": 2016,
-   "captured": "29.10.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "B16 Studios",
+   "scheme_id": 109,
+   "score": 1.5
   },
   {
-   "property": "Cardinal House",
-   "operator": "Birmingham City Student Homes",
-   "postcode": "B8 3TE",
-   "beds": 44,
-   "build_year": 2016,
-   "captured": null,
-   "nominations": false,
-   "no_letting_presence": true,
-   "notes": "No 26-27 letting presence found"
+   "benchmark": "Cardinal House",
+   "scheme_id": 110,
+   "score": 1.5
   },
   {
-   "property": "The Recording Rooms",
-   "operator": "Homes For Students",
-   "postcode": "B29 6FW",
-   "beds": 267,
-   "build_year": 2016,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "The Recording Rooms",
+   "scheme_id": 111,
+   "score": 1.5
   },
   {
-   "property": "800 Bristol Road",
-   "operator": "Prestige Student Living",
-   "postcode": "B29 6NA",
-   "beds": 103,
-   "build_year": 2016,
-   "captured": "4.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "800 Bristol Road",
+   "scheme_id": 112,
+   "score": 1.5
   },
   {
-   "property": "Selly Oak Apartments",
-   "operator": "Hello Student",
-   "postcode": "B29 6AR",
-   "beds": 120,
-   "build_year": 2017,
-   "captured": "21.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Selly Oak Apartments",
+   "scheme_id": 113,
+   "score": 1.5
   },
   {
-   "property": "88 Bromsgrove House",
-   "operator": "Prestige Student Living",
-   "postcode": "B5 6QB",
-   "beds": 140,
-   "build_year": 2017,
-   "captured": "4.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "88 Bromsgrove House",
+   "scheme_id": 114,
+   "score": 1.5
   },
   {
-   "property": "Bristol Street",
-   "operator": "Principle Estate Management",
-   "postcode": "B5 7AH",
-   "beds": 154,
-   "build_year": 2017,
-   "captured": "2.1.26",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Bristol Street",
+   "scheme_id": 115,
+   "score": 1.5
   },
   {
-   "property": "George Road",
-   "operator": "Purple Frog Property Ltd",
-   "postcode": "B15 1PL",
-   "beds": 50,
-   "build_year": 2017,
-   "captured": "2.1.26",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "George Road",
+   "scheme_id": 116,
+   "score": 1.5
   },
   {
-   "property": "Bentley House",
-   "operator": "YUGO",
-   "postcode": "B4 7AU",
-   "beds": 564,
-   "build_year": 2017,
-   "captured": "25.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Bentley House",
+   "scheme_id": 117,
+   "score": 1.5
   },
   {
-   "property": "The Emporium",
-   "operator": "Hello Student",
-   "postcode": "B5 5JU",
-   "beds": 180,
-   "build_year": 2018,
-   "captured": "24.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "The Emporium",
+   "scheme_id": 118,
+   "score": 1.5
   },
   {
-   "property": "Stanford House",
-   "operator": "Unite Students",
-   "postcode": "B4 7DN",
-   "beds": 586,
-   "build_year": 2018,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Stanford House",
+   "scheme_id": 119,
+   "score": 1.5
   },
   {
-   "property": "Beechenhurst House",
-   "operator": "Amare Students",
-   "postcode": "B29 7HU",
-   "beds": 47,
-   "build_year": 2019,
-   "captured": null,
-   "nominations": false,
-   "no_letting_presence": true,
-   "notes": "No 26-27 letting presence found"
+   "benchmark": "Beechenhurst House",
+   "scheme_id": 120,
+   "score": 1.5
   },
   {
-   "property": "The Toybox",
-   "operator": "Here Student Living",
-   "postcode": "B15 1ET",
-   "beds": 290,
-   "build_year": 2019,
-   "captured": "16.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "The Toybox",
+   "scheme_id": 121,
+   "score": 1.5
   },
   {
-   "property": "Battery Park",
-   "operator": "Unite Students",
-   "postcode": "B29 6SR",
-   "beds": 417,
-   "build_year": 2019,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Battery Park",
+   "scheme_id": 122,
+   "score": 1.5
   },
   {
-   "property": "Pebble Mill - Vita Student",
-   "operator": "Vita Student",
-   "postcode": "B29 7ES",
-   "beds": 360,
-   "build_year": 2019,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Pebble Mill - Vita Student",
+   "scheme_id": 123,
+   "score": 1.5
   },
   {
-   "property": "Globe Works",
-   "operator": "YUGO",
-   "postcode": "B19 3SH",
-   "beds": 520,
-   "build_year": 2019,
-   "captured": "8.12.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Globe Works",
+   "scheme_id": 124,
+   "score": 1.5
   },
   {
-   "property": "Altura",
-   "operator": "Mezzino",
-   "postcode": "B15 1NE",
-   "beds": 435,
-   "build_year": 2020,
-   "captured": "16.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Altura",
+   "scheme_id": 125,
+   "score": 1.5
   },
   {
-   "property": "Onyx",
-   "operator": "Prestige Student Living",
-   "postcode": "B4 7BZ",
-   "beds": 1023,
-   "build_year": 2020,
-   "captured": "4.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Onyx",
+   "scheme_id": 126,
+   "score": 1.5
   },
   {
-   "property": "True Student Birmingham",
-   "operator": "True Student Limited",
-   "postcode": "B5 4SJ",
-   "beds": 398,
-   "build_year": 2020,
-   "captured": "1.12.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "True Student Birmingham",
+   "scheme_id": 127,
+   "score": 1.5
   },
   {
-   "property": "Bridge Street Studios",
-   "operator": "Homes For Students",
-   "postcode": "B19 2YX",
-   "beds": 70,
-   "build_year": 2021,
-   "captured": "4.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Bridge Street Studios",
+   "scheme_id": 128,
+   "score": 1.5
   },
   {
-   "property": "Volume Works",
-   "operator": "Homes For Students",
-   "postcode": "B19 3SP",
-   "beds": 47,
-   "build_year": 2021,
-   "captured": "4.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Volume Works",
+   "scheme_id": 129,
+   "score": 1.5
   },
   {
-   "property": "249 Windsor Court",
-   "operator": "Student Letting Company",
-   "postcode": "B7 4NG",
-   "beds": 73,
-   "build_year": 2021,
-   "captured": "2.1.26",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "249 Windsor Court",
+   "scheme_id": 130,
+   "score": 1.5
   },
   {
-   "property": "504 Bristol Road",
-   "operator": "UniHouse",
-   "postcode": "B29 6BD",
-   "beds": 70,
-   "build_year": 2021,
-   "captured": null,
-   "nominations": false,
-   "no_letting_presence": true,
-   "notes": "No 26-27 letting presence found"
+   "benchmark": "504 Bristol Road",
+   "scheme_id": 131,
+   "score": 1.5
   },
   {
-   "property": "Compass",
-   "operator": "Prestige Student Living",
-   "postcode": "B4 7XX",
-   "beds": 290,
-   "build_year": 2022,
-   "captured": "4.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Compass",
+   "scheme_id": 132,
+   "score": 1.5
   },
   {
-   "property": "Pershore Junction",
-   "operator": "Prestige Student Living",
-   "postcode": "B30 2XN",
-   "beds": 167,
-   "build_year": 2024,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Pershore Junction",
+   "scheme_id": 133,
+   "score": 1.5
   },
   {
-   "property": "Metchley Hall",
-   "operator": "Allied Student Accommodation",
-   "postcode": "B17  0DA",
-   "beds": 83,
-   "build_year": 2011,
-   "captured": "29.10.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Metchley Hall",
+   "scheme_id": 134,
+   "score": 1.5
   },
   {
-   "property": "College House",
-   "operator": "Birmingham City Student Homes",
-   "postcode": "B8 3TE",
-   "beds": 90,
-   "build_year": null,
-   "captured": null,
-   "nominations": false,
-   "no_letting_presence": true,
-   "notes": "No 26-27 letting presence found"
+   "benchmark": "College House",
+   "scheme_id": 135,
+   "score": 1.5
   },
   {
-   "property": "Lyttleton House",
-   "operator": "Birmingham City Student Homes",
-   "postcode": "B8 3TE",
-   "beds": 50,
-   "build_year": null,
-   "captured": null,
-   "nominations": false,
-   "no_letting_presence": true,
-   "notes": "No 26-27 letting presence found"
+   "benchmark": "Lyttleton House",
+   "scheme_id": 136,
+   "score": 1.5
   },
   {
-   "property": "Hamstead Hall",
-   "operator": "Evenbrook Group",
-   "postcode": "B20 1AP",
-   "beds": 600,
-   "build_year": null,
-   "captured": "2.1.26",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Hamstead Hall",
+   "scheme_id": 137,
+   "score": 1.5
   },
   {
-   "property": "Canalside",
-   "operator": "Homes For Students",
-   "postcode": "B19 3SJ",
-   "beds": 609,
-   "build_year": null,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Canalside",
+   "scheme_id": 138,
+   "score": 1.5
   },
   {
-   "property": "Queens Hospital Close",
-   "operator": "Host Students",
-   "postcode": "B15 1NH",
-   "beds": 337,
-   "build_year": null,
-   "captured": "21.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Queens Hospital Close",
+   "scheme_id": 139,
+   "score": 1.5
   },
   {
-   "property": "Duncan Smith House",
-   "operator": "Premier Student Halls",
-   "postcode": "B17 0QH",
-   "beds": 48,
-   "build_year": null,
-   "captured": "2.1.26",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Duncan Smith House",
+   "scheme_id": 140,
+   "score": 1.5
   },
   {
-   "property": "Bywater House",
-   "operator": "Purple Frog Property Ltd",
-   "postcode": "B16 9AU",
-   "beds": 39,
-   "build_year": null,
-   "captured": null,
-   "nominations": false,
-   "no_letting_presence": true,
-   "notes": "No 26-27 letting presence found"
+   "benchmark": "Bywater House",
+   "scheme_id": 141,
+   "score": 1.5
   },
   {
-   "property": "Harriet Martineau",
-   "operator": "Unite Students",
-   "postcode": "B4 7UP",
-   "beds": 420,
-   "build_year": null,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Harriet Martineau",
+   "scheme_id": 142,
+   "score": 1.5
   },
   {
-   "property": "James Watt",
-   "operator": "Unite Students",
-   "postcode": "B4 7UP",
-   "beds": 820,
-   "build_year": null,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "James Watt",
+   "scheme_id": 143,
+   "score": 1.5
   },
   {
-   "property": "Lakeside",
-   "operator": "Unite Students",
-   "postcode": "B4 7UP",
-   "beds": 647,
-   "build_year": null,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Lakeside",
+   "scheme_id": 144,
+   "score": 1.5
   },
   {
-   "property": "Mary Sturge",
-   "operator": "Unite Students",
-   "postcode": "B4 7UP",
-   "beds": 677,
-   "build_year": null,
-   "captured": "5.11.25",
-   "nominations": false,
-   "no_letting_presence": false,
-   "notes": null
+   "benchmark": "Mary Sturge",
+   "scheme_id": 145,
+   "score": 1.5
   }
  ],
+ "missing_from_ours": [],
  "ours_not_in_benchmark": [
   {
    "id": 32,
