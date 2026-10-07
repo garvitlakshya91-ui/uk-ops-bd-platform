@@ -303,6 +303,22 @@ def gather_city_context(db: Session, council_name: str,
                 (total_beds + uni_beds) / demand["pool"]["pool"], 3)
             demand["pool"]["coverage_pct"] = round(100 * demand["pool"]["coverage"], 1)
 
+    # --------------------------------------------------- rents by room type
+    rent_segments = [
+        {"room_type": r[0], "tiers": r[1], "schemes": r[2],
+         "q1": round(float(r[3])), "median": round(float(r[4])), "q3": round(float(r[5]))}
+        for r in db.execute(text("""
+            SELECT sr.room_type, COUNT(*), COUNT(DISTINCT sr.scheme_id),
+                   percentile_cont(0.25) WITHIN GROUP (ORDER BY sr.rent_per_week),
+                   percentile_cont(0.5)  WITHIN GROUP (ORDER BY sr.rent_per_week),
+                   percentile_cont(0.75) WITHIN GROUP (ORDER BY sr.rent_per_week)
+            FROM scheme_rents sr JOIN existing_schemes es ON es.id = sr.scheme_id
+            WHERE es.council_id = :cid AND sr.is_current AND sr.source = 'operator_page'
+              AND sr.rent_per_week BETWEEN 60 AND 500 AND sr.room_type IS NOT NULL
+            GROUP BY sr.room_type HAVING COUNT(*) >= 3 ORDER BY COUNT(*) DESC
+        """), {"cid": council.id}).fetchall()
+    ]
+
     # ------------------------------------------------------------ finance
     median_rent = db.execute(text("""
         SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY sr.rent_per_week)
@@ -378,6 +394,7 @@ def gather_city_context(db: Session, council_name: str,
         "afford": afford,
         "hmo": hmo,
         "finance": finance,
+        "rent_segments": rent_segments,
         "ownership": ownership,
         "source_mix": sorted(source_mix.items(), key=lambda kv: -kv[1]),
     }

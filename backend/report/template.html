@@ -296,6 +296,21 @@
   cases are conservative.</p>
   {% endif %}
 
+  {% if rent_segments %}
+  <h2>Advertised rents by room type · operator pages</h2>
+  <table>
+    <tr><th>Room type</th><th class="num">Priced tiers</th><th class="num">Schemes</th>
+        <th class="num">Lower quartile £/wk</th><th class="num">Median £/wk</th><th class="num">Upper quartile £/wk</th></tr>
+    {% for s in rent_segments %}
+    <tr><td>{{ s.room_type }}</td><td class="num">{{ s.tiers }}</td><td class="num">{{ s.schemes }}</td>
+        <td class="num">{{ s.q1 }}</td><td class="num"><b>{{ s.median }}</b></td><td class="num">{{ s.q3 }}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="note">Room-level tiers with the operator's own tier names and contract lengths,
+  captured from operator property pages {{ generated }}; the first point in the weekly
+  booking-season series.</p>
+  {% endif %}
+
   {% if afford %}
   <h2>Affordability</h2>
   <p>The maximum maintenance loan outside London ({{ demand.loan_year }}) is
