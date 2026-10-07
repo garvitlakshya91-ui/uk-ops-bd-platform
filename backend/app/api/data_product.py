@@ -28,9 +28,8 @@ from sqlalchemy.orm import Session
 from app.api.auth import get_current_user
 from app.census_sources import publishable
 from app.database import get_db
-from app.models.models import (
-    Company, Council, ExistingScheme, PlanningApplication, User,
-)
+from app.models.models import Company, Council, ExistingScheme, PlanningApplication
+from app.models.user import User
 
 router = APIRouter(prefix="/api/v2/data", tags=["Data product"])
 
