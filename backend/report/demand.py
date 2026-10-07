@@ -80,6 +80,42 @@ def gather_demand_context(db: Session, council_id: int) -> dict | None:
     years = sorted({r.academic_year for r in rows}, reverse=True)[:5]
     latest = years[0]
 
+    # Demand mix for the latest year: first-years and domicile per
+    # institution (HESA table 1 segments), the inputs for propensity.
+    seg_rows = (
+        db.query(HesaEnrolment)
+        .filter(HesaEnrolment.institution_id.in_([i.id for i in institutions]),
+                HesaEnrolment.academic_year == latest,
+                HesaEnrolment.level.in_(("entrant", "dom_uk", "dom_eu", "dom_non_eu")))
+        .all()
+    )
+    segs: dict[int, dict[str, int]] = {}
+    for r in seg_rows:
+        segs.setdefault(r.institution_id, {})[r.level] = r.full_time_students
+    mix = []
+    for inst in institutions:
+        total = by_inst.get(inst.id, {}).get(latest)
+        s = segs.get(inst.id)
+        if not total or not s:
+            continue
+        intl = (s.get("dom_eu") or 0) + (s.get("dom_non_eu") or 0)
+        mix.append({
+            "institution": inst.name, "total": total,
+            "entrant_pct": round(100 * s["entrant"] / total, 1) if s.get("entrant") else None,
+            "intl_pct": round(100 * intl / total, 1) if intl else None,
+            "non_eu_pct": round(100 * (s.get("dom_non_eu") or 0) / total, 1)
+            if s.get("dom_non_eu") else None,
+        })
+    mix.sort(key=lambda m: -m["total"])
+    city_total = sum(m["total"] for m in mix) or None
+    mix_city = None
+    if city_total:
+        ent = sum(segs[i.id].get("entrant", 0) for i in institutions if i.id in segs)
+        intl = sum((segs[i.id].get("dom_eu", 0) + segs[i.id].get("dom_non_eu", 0))
+                   for i in institutions if i.id in segs)
+        mix_city = {"entrant_pct": round(100 * ent / city_total, 1),
+                    "intl_pct": round(100 * intl / city_total, 1)}
+
     table = []
     for inst in sorted(institutions, key=lambda i: -(by_inst.get(i.id, {}).get(latest) or 0)):
         table.append({
@@ -151,6 +187,8 @@ def gather_demand_context(db: Session, council_id: int) -> dict | None:
         "totals": totals,
         "adjusted_students": round(adjusted_students),
         "pool": pool,
+        "mix": mix,
+        "mix_city": mix_city,
         "loan_year": loan.academic_year if loan else None,
         "max_loan": loan.max_loan_gbp if loan else None,
         "sources": sources,

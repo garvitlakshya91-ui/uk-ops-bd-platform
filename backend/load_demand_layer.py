@@ -90,8 +90,10 @@ def upsert_enrolment(db, inst: Institution, year: str, n: int, source: str) -> b
         .first()
     )
     if row is not None:
-        # The official CSV outranks a benchmark-sourced figure.
-        if source.startswith("hesa") and row.source != source and row.full_time_students != n:
+        # An official HESA load may correct any earlier value (a benchmark
+        # figure or a previous load); a benchmark load never overwrites.
+        official = source.startswith("hesa_table")
+        if official and row.full_time_students != n:
             row.full_time_students, row.source = n, source
             return True
         return False
@@ -117,41 +119,68 @@ def load_benchmark(db, lookup, path: str) -> int:
 
 
 def load_hesa_csv(db, lookup, path: str) -> int:
-    """HESA table-1 bulk CSV: one row per provider/year/level/mode."""
+    """HESA table-1 bulk CSV (the table-1.zip yearly files, or any slice
+    of them): one row per provider x country x region x entrant marker x
+    level x mode x year x category.
+
+    Full-time rows only. Segment keys stored in hesa_enrolments.level:
+      all                       headline FT total (Category marker = Total)
+      undergraduate / postgraduate (+ taught / research / first degree)
+      entrant                   first-year full-time students
+      dom_uk / dom_eu / dom_non_eu   by permanent address
+    """
     n = 0
     with open(path, newline="", encoding="utf-8-sig") as fh:
         # HESA CSVs carry preamble lines before the header row.
         lines = [ln for ln in fh if ln.strip()]
     header_i = next(i for i, ln in enumerate(lines) if "HE provider" in ln)
     reader = csv.DictReader(lines[header_i:])
-    totals: dict[tuple[int, str], int] = {}
-    # Segment keys stored in hesa_enrolments.level: "all" drives the
-    # headline ratio; UG/PG segments feed propensity weighting once the
-    # coefficients are calibrated (HESA term-time accommodation data).
+
+    def col(rec, *names):
+        for name in names:
+            if name in rec:
+                return (rec.get(name) or "").strip()
+        return ""
+
     level_map = {
         "All": "all", "Total": "all", "": "all",
         "All undergraduate": "undergraduate",
-        "First degree": "undergraduate",
+        "First degree": "undergraduate_first_degree",
         "All postgraduate": "postgraduate",
         "Postgraduate (taught)": "postgraduate_taught",
         "Postgraduate (research)": "postgraduate_research",
     }
+    domicile_map = {"Total UK": "dom_uk", "European Union": "dom_eu",
+                    "Non-European Union": "dom_non_eu"}
     seg_totals: dict[tuple[int, str, str], int] = {}
     for rec in reader:
-        if (rec.get("Mode of study") or "").strip() != "Full-time":
+        if col(rec, "Mode of study") != "Full-time":
             continue
-        level = level_map.get((rec.get("Level of study") or "").strip())
-        if level is None:
+        if col(rec, "Country of HE provider") not in ("All", "") or \
+                col(rec, "Region of HE provider") not in ("All", ""):
             continue
-        inst = lookup.get(norm_inst(rec.get("HE provider", "")))
+        inst = lookup.get(norm_inst(col(rec, "HE provider")))
         if inst is None:
             continue
-        year = norm_year(rec.get("Academic Year", ""))
+        year = norm_year(col(rec, "Academic Year", "Academic year"))
         try:
-            num = int(str(rec.get("Number", "")).replace(",", ""))
+            num = int(col(rec, "Number").replace(",", ""))
         except ValueError:
             continue
-        seg_totals[(inst.id, year, level)] = num
+        entrant = col(rec, "Entrant marker", "First year marker") or "All"
+        level_raw = col(rec, "Level of study")
+        cat_marker, category = col(rec, "Category marker"), col(rec, "Category")
+
+        if entrant == "All" and cat_marker in ("Total", ""):
+            level = level_map.get(level_raw)
+            if level is not None:
+                seg_totals[(inst.id, year, level)] = num
+        elif entrant == "All" and cat_marker == "Permanent address" and level_raw == "All":
+            seg = domicile_map.get(category)
+            if seg:
+                seg_totals[(inst.id, year, seg)] = num
+        elif entrant == "Entrant" and level_raw == "All" and cat_marker in ("Total", ""):
+            seg_totals[(inst.id, year, "entrant")] = num
     by_id = {i.id: i for i in lookup.values()}
     for (inst_id, year, level), num in seg_totals.items():
         inst = by_id[inst_id]

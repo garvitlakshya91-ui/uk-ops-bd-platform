@@ -251,6 +251,28 @@
   ×-factors are campus adjustments: the share of an institution's students who study
   in {{ city }}.</p>
 
+  {% if demand.mix %}
+  <h2>Demand mix, {{ demand.latest_year }} · who the students are</h2>
+  <table>
+    <tr><th>Institution</th><th class="num">Full-time</th><th class="num">First-years</th>
+        <th class="num">International</th><th class="num">of which non-EU</th></tr>
+    {% for m in demand.mix %}
+    <tr><td>{{ m.institution }}</td><td class="num">{{ "{:,}".format(m.total) }}</td>
+        <td class="num">{{ m.entrant_pct ~ "%" if m.entrant_pct else "—" }}</td>
+        <td class="num">{{ m.intl_pct ~ "%" if m.intl_pct else "—" }}</td>
+        <td class="num">{{ m.non_eu_pct ~ "%" if m.non_eu_pct else "—" }}</td></tr>
+    {% endfor %}
+    {% if demand.mix_city %}
+    <tr><td><b>City</b></td><td class="num"><b>{{ "{:,}".format(demand.adjusted_students) }}</b></td>
+        <td class="num"><b>{{ demand.mix_city.entrant_pct }}%</b></td>
+        <td class="num"><b>{{ demand.mix_city.intl_pct }}%</b></td><td></td></tr>
+    {% endif %}
+  </table>
+  <p class="note">First-years and international students are the segments with the highest
+  propensity for PBSA; the share of each is the lever behind any demand-pool weighting.
+  Source: HESA table 1 (entrant marker and permanent address), full-time.</p>
+  {% endif %}
+
   {% if demand.pool and demand.pool.coverage %}
   {% set p = demand.pool %}
   <h2>Demand pool — students actually in the PBSA market</h2>
