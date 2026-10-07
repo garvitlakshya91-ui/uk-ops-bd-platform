@@ -167,23 +167,36 @@ def extract_pipeline(ws) -> list[dict]:
     return rows
 
 
+YEAR_RE = re.compile(r"(20\d{2})\s*[-/]\s*(\d{2})")
+
+
 def extract_hesa(ws) -> list[dict]:
-    header = None
+    """HESA table: map each value to its own column's year.
+
+    Year headers vary ("2023-24", "Academic Year 2021-22", " 2020-21"),
+    so each column's year is searched for in its header and values are
+    read by that column index — never by position in a filtered list,
+    which silently shifts every year when one header doesn't parse.
+    """
+    name_col = None
+    year_cols: dict[int, str] = {}
     rows = []
     for row in ws.iter_rows(min_row=1, values_only=True):
         cells = [_s(c) for c in row]
-        if header is None:
+        if name_col is None:
             if any("Higher Education" in c for c in cells):
-                idx = next(i for i, c in enumerate(cells) if "Higher Education" in c)
-                header = (idx, [c for c in cells[idx + 1:] if re.match(r"^\d{4}", c)])
+                name_col = next(i for i, c in enumerate(cells) if "Higher Education" in c)
+                for i, c in enumerate(cells):
+                    m = YEAR_RE.search(c)
+                    if i != name_col and m:
+                        year_cols[i] = f"{m.group(1)}-{m.group(2)}"
             continue
-        idx, years = header
-        name = cells[idx]
+        name = cells[name_col] if name_col < len(cells) else ""
         if not name:
             continue
         values = {}
-        for j, year in enumerate(years):
-            n = _int(row[idx + 1 + j])
+        for i, year in year_cols.items():
+            n = _int(row[i]) if i < len(row) else None
             if n is not None:
                 values[year] = n
         if values:
