@@ -55,6 +55,15 @@ celery_app.conf.beat_schedule = {
                             month_of_year="2,5,8,11"),
         "options": {"queue": "scraping"},
     },
+    # Weekly availability check through the letting window (Aug-Oct):
+    # sold-out/limited states between rent captures are the revealed-
+    # demand series no annual report has.
+    "check-availability-letting-window": {
+        "task": "app.tasks.scraping_tasks.check_availability_weekly",
+        "schedule": crontab(hour=4, minute=0, day_of_week="monday",
+                            month_of_year="8,9,10"),
+        "options": {"queue": "scraping"},
+    },
     # Enrichment schedules
     # Re-enabled 2026-07-03 at a gentler every-2-hours cadence so CH lookups
     # don't monopolise worker slots (previous hourly cadence starved the

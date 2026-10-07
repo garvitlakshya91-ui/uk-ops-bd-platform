@@ -629,6 +629,37 @@ class SchemeRent(Base):
     )
 
 
+class SchemeAvailability(Base):
+    """One availability observation per scheme per capture — append-only.
+
+    Depletion between captures (available -> sold_out) is revealed
+    demand; the letting-window weekly crawl densifies the series when
+    it matters (Aug-Oct)."""
+
+    __tablename__ = "scheme_availability"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scheme_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    captured_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    state: Mapped[str] = mapped_column(
+        String(30), nullable=False,
+        comment="available / limited / sold_out / no_listing",
+    )
+    rooms_listed: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    academic_year: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+
+    __table_args__ = (
+        Index("ix_availability_scheme_time", "scheme_id", "captured_at"),
+    )
+
+
 class Institution(Base):
     """A higher-education institution mapped to the council where its
     students actually live — the demand side of every market report."""
@@ -710,6 +741,24 @@ class MaintenanceLoan(Base):
 
     __table_args__ = (
         UniqueConstraint("academic_year", "region", name="uq_loan_year_region"),
+    )
+
+
+class VisaIssuance(Base):
+    """Sponsored-study visas granted per quarter (Home Office statistics)."""
+
+    __tablename__ = "visa_issuances"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    quarter: Mapped[str] = mapped_column(String(10), nullable=False)
+    nationality: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, comment="NULL = all nationalities"
+    )
+    visas_granted: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("quarter", "nationality", name="uq_visa_quarter_nat"),
     )
 
 

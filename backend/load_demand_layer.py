@@ -123,11 +123,23 @@ def load_hesa_csv(db, lookup, path: str) -> int:
     header_i = next(i for i, ln in enumerate(lines) if "HE provider" in ln)
     reader = csv.DictReader(lines[header_i:])
     totals: dict[tuple[int, str], int] = {}
+    # Segment keys stored in hesa_enrolments.level: "all" drives the
+    # headline ratio; UG/PG segments feed propensity weighting once the
+    # coefficients are calibrated (HESA term-time accommodation data).
+    level_map = {
+        "All": "all", "Total": "all", "": "all",
+        "All undergraduate": "undergraduate",
+        "First degree": "undergraduate",
+        "All postgraduate": "postgraduate",
+        "Postgraduate (taught)": "postgraduate_taught",
+        "Postgraduate (research)": "postgraduate_research",
+    }
+    seg_totals: dict[tuple[int, str, str], int] = {}
     for rec in reader:
         if (rec.get("Mode of study") or "").strip() != "Full-time":
             continue
-        level = (rec.get("Level of study") or "").strip()
-        if level not in ("All", "Total", ""):
+        level = level_map.get((rec.get("Level of study") or "").strip())
+        if level is None:
             continue
         inst = lookup.get(norm_inst(rec.get("HE provider", "")))
         if inst is None:
@@ -137,11 +149,31 @@ def load_hesa_csv(db, lookup, path: str) -> int:
             num = int(str(rec.get("Number", "")).replace(",", ""))
         except ValueError:
             continue
-        totals[(inst.id, year)] = num
+        seg_totals[(inst.id, year, level)] = num
     by_id = {i.id: i for i in lookup.values()}
-    for (inst_id, year), num in totals.items():
-        if upsert_enrolment(db, by_id[inst_id], year, num, "hesa_table1_csv"):
-            n += 1
+    for (inst_id, year, level), num in seg_totals.items():
+        inst = by_id[inst_id]
+        if level == "all":
+            if upsert_enrolment(db, inst, year, num, "hesa_table1_csv"):
+                n += 1
+        else:
+            from app.models.models import HesaEnrolment
+            row = (
+                db.query(HesaEnrolment)
+                .filter(HesaEnrolment.institution_id == inst.id,
+                        HesaEnrolment.academic_year == norm_year(year),
+                        HesaEnrolment.level == level)
+                .first()
+            )
+            if row is None:
+                db.add(HesaEnrolment(
+                    institution_id=inst.id, academic_year=norm_year(year),
+                    full_time_students=num, level=level,
+                    source="hesa_table1_csv"))
+                n += 1
+            elif row.full_time_students != num:
+                row.full_time_students = num
+                n += 1
     return n
 
 

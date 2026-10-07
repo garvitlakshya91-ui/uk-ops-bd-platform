@@ -225,6 +225,7 @@ def gather_city_context(db: Session, council_name: str) -> dict:
         balance = balance_scenarios(
             demand["adjusted_students"], total_beds + uni_beds,
             approved, approved + pending,
+            model_growth=demand.get("cagr"),
         )
         afford = affordability(db, council.id, demand["max_loan"])
 

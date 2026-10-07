@@ -14,7 +14,9 @@ from sqlalchemy.orm import Session
 from app.models.models import HesaEnrolment, Institution, MaintenanceLoan
 
 FORWARD_YEARS = 5
-GROWTH_SCENARIOS = [0.0, 0.01, 0.02]
+# Bear/bull bands around the modelled (historic-CAGR) growth rate.
+SCENARIO_BAND = 0.015
+CAGR_FLOOR, CAGR_CAP = -0.03, 0.05
 ASSUMED_TENANCY_WEEKS = 51
 
 
@@ -66,10 +68,21 @@ def gather_demand_context(db: Session, council_id: int) -> dict | None:
         .first()
     )
 
+    # City growth model: CAGR over the covered span, clamped to a sane
+    # band — replaces guessed flat growth rates in the scenario grid.
+    span_years = [y for y in reversed(years) if totals.get(y)]
+    cagr = None
+    if len(span_years) >= 3:
+        first, last = totals[span_years[0]], totals[span_years[-1]]
+        if first > 0:
+            cagr = (last / first) ** (1 / (len(span_years) - 1)) - 1
+            cagr = max(CAGR_FLOOR, min(CAGR_CAP, cagr))
+
     sources = sorted({r.source for r in rows if r.source})
     return {
         "years": years,
         "latest_year": latest,
+        "cagr": cagr,
         "table": table,
         "totals": totals,
         "adjusted_students": round(adjusted_students),
@@ -80,16 +93,31 @@ def gather_demand_context(db: Session, council_id: int) -> dict | None:
 
 
 def balance_scenarios(students: float, beds_now: int,
-                      approved_beds: int, identified_beds: int) -> dict:
-    """Beds-per-student grid: growth scenarios x pipeline delivery."""
+                      approved_beds: int, identified_beds: int,
+                      model_growth: float | None = None) -> dict:
+    """Beds-per-student grid: growth scenarios x pipeline delivery.
+
+    Growth rows are modelled from the city's own enrolment CAGR with a
+    bear/bull band, falling back to 0/1/2% when history is too short.
+    """
     cases = [("Current stock only", beds_now),
              ("Plus approved pipeline", beds_now + approved_beds),
              ("Plus all identified pipeline", beds_now + identified_beds)]
+    if model_growth is not None:
+        scenarios = [
+            (f"Bear ({model_growth - SCENARIO_BAND:+.1%})",
+             model_growth - SCENARIO_BAND),
+            (f"Model — historic CAGR ({model_growth:+.1%})", model_growth),
+            (f"Bull ({model_growth + SCENARIO_BAND:+.1%})",
+             model_growth + SCENARIO_BAND),
+        ]
+    else:
+        scenarios = [("0%", 0.0), ("1%", 0.01), ("2%", 0.02)]
     grid = []
-    for g in GROWTH_SCENARIOS:
+    for label, g in scenarios:
         future_students = students * (1 + g) ** FORWARD_YEARS
         grid.append({
-            "growth": f"{g:.0%}",
+            "growth": label,
             "cells": [
                 {"case": case, "ratio": round(beds / future_students, 3)}
                 for case, beds in cases

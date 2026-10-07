@@ -1655,3 +1655,25 @@ def capture_rents_quarterly() -> dict[str, Any]:
         logger.info("rent_capture_city_done", city=council,
                     returncode=proc.returncode)
     return results
+
+
+@celery_app.task(name="app.tasks.scraping_tasks.check_availability_weekly")
+def check_availability_weekly() -> dict[str, Any]:
+    """Weekly letting-window availability check across report cities."""
+    import os
+    import subprocess
+    import sys as _sys
+
+    pairs = os.environ.get("REPORT_CITIES", "Birmingham:birmingham")
+    script = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))), "check_availability.py")
+    results: dict[str, Any] = {}
+    for pair in [p.strip() for p in pairs.split(",") if p.strip()]:
+        council = pair.partition(":")[0]
+        proc = subprocess.run(
+            [_sys.executable, script, "--city", council],
+            capture_output=True, text=True, timeout=3600,
+        )
+        results[council] = {"returncode": proc.returncode,
+                            "tail": proc.stdout[-800:]}
+    return results
