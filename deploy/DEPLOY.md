@@ -69,3 +69,17 @@ docker compose -f docker-compose.prod.yml --env-file .env.production up -d --bui
 - Set `SENTRY_DSN` for error reporting before sharing the URL with users.
 - Back up with:
   `docker compose -f docker-compose.prod.yml exec postgres pg_dump -U postgres -Fc -Z 6 uk_ops_bd > backup_$(date +%F).dump`
+
+## After the data restore: finance and ownership derivations
+
+Once `title_ownership` exists (loaded by `backend/hmlr_ingest.py` from the
+monthly Land Registry CCOD/OCOD files), derive transactions and owner
+changes for the report cities:
+
+```bash
+docker compose -f docker-compose.prod.yml exec backend \
+  python derive_transactions_from_titles.py --council Birmingham
+```
+
+Re-run after each monthly CCOD load; it only adds deals and events it
+has not seen. Deals are `basis = derived` (price at title registration).
