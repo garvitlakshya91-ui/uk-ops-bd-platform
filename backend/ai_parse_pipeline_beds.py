@@ -53,7 +53,10 @@ def main() -> None:
         raise SystemExit("ANTHROPIC_API_KEY not set — add it to the environment")
 
     import anthropic
-    client = anthropic.Anthropic()
+    headers = {}
+    if os.environ.get("ANTHROPIC_WORKSPACE_ID"):
+        headers["anthropic-workspace-id"] = os.environ["ANTHROPIC_WORKSPACE_ID"]
+    client = anthropic.Anthropic(default_headers=headers or None)
 
     db = SessionLocal()
     council = db.query(Council).filter(Council.name.ilike(args.council)).first()

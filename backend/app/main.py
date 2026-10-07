@@ -86,6 +86,8 @@ app.include_router(users_router)
 app.include_router(ai_enrichment_router)
 app.include_router(ownership_router)
 app.include_router(map_router)
+from app.api.data_product import router as data_product_router  # noqa: E402
+app.include_router(data_product_router)
 
 
 # ---------------------------------------------------------------------------

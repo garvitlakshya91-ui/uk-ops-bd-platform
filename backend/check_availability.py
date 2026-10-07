@@ -26,6 +26,7 @@ from sqlalchemy import text as sqltext
 
 from app.database import SessionLocal
 from app.models.models import Council, SchemeAvailability
+from app.models.observations import record_observation
 
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
@@ -45,17 +46,39 @@ AY_RE = re.compile(r"\b(20\d{2})\s*[/–-]\s*(?:20)?(\d{2})\b")
 
 
 def classify(html: str) -> tuple[str, str | None]:
+    """Letting state and the academic year that state refers to.
+
+    The year is read from the text NEAREST the sold-out/limited wording
+    (within ~200 characters), never the first year on the page — a
+    page can list the current year's tenancies above next year's
+    booking status.
+    """
     text = re.sub(r"(?s)<(script|style)[^>]*>.*?</\1>", " ", html)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
-    state = "available"
-    if SOLD_OUT_RE.search(text):
-        state = "sold_out"
-    elif LIMITED_RE.search(text):
-        state = "limited"
-    year = None
-    m = AY_RE.search(text)
+    text = re.sub(r"\s+", " ", text)
+    state, anchor = "available", None
+    m = SOLD_OUT_RE.search(text)
     if m:
-        year = f"{m.group(1)}-{m.group(2)[-2:]}"
+        state, anchor = "sold_out", m
+    else:
+        m = LIMITED_RE.search(text)
+        if m:
+            state, anchor = "limited", m
+    year = None
+    if anchor is not None:
+        window = text[max(0, anchor.start() - 200):anchor.end() + 200]
+        nearest, best_dist = None, 10**6
+        for ym in AY_RE.finditer(window):
+            dist = abs(ym.start() - (anchor.start() - max(0, anchor.start() - 200)))
+            if dist < best_dist:
+                nearest, best_dist = ym, dist
+        if nearest:
+            year = f"{nearest.group(1)}-{nearest.group(2)[-2:]}"
+    else:
+        # Available: the booking year is whichever the page offers first.
+        ym = AY_RE.search(text)
+        if ym:
+            year = f"{ym.group(1)}-{ym.group(2)[-2:]}"
     return state, year
 
 
@@ -111,6 +134,9 @@ def main() -> None:
                     scheme_id=scheme_id, state=state, academic_year=year,
                     source="listing_page_check", source_reference=url,
                 ))
+                record_observation(db, scheme_id, "booking_status", state,
+                                   "listing_page_check", reference=url,
+                                   academic_year=year, refresh_cache=False)
         if not args.dry_run:
             db.commit()
     finally:

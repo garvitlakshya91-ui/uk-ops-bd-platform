@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.models.models import Company, Council, ExistingScheme, PlanningApplication
 from app.census_sources import published_value
 from report.demand import affordability, balance_scenarios, gather_demand_context
+from report.finance import gather_finance_context
 
 APPROVED_RE = re.compile(r"approv|permit|grant|consent", re.I)
 PENDING_RE = re.compile(r"submit|pending|regist|await|valid|consult", re.I)
@@ -196,18 +197,44 @@ def gather_city_context(db: Session, council_name: str,
         (a for a in apps if classify_status(a.status, a.decision) != "refused"),
         key=lambda a: -(a.pbsa_beds or 0),
     )[:12]
+
+    this_year = datetime.date.today().year
+
+    def delivery_status(a: PlanningApplication) -> tuple[str, str]:
+        """(label, basis). A stale expected year is intelligence, not a date."""
+        cs = (a.construction_status or "").lower()
+        if cs == "complete":
+            return "complete", "observed"
+        if cs == "under_construction":
+            return "under construction", "observed"
+        if cs == "lapsed":
+            return "consent lapsed", "observed"
+        cls = classify_status(a.status, a.decision)
+        if cls == "pending":
+            return "awaiting decision", "observed"
+        if cls == "approved" and a.expected_delivery_year and a.expected_delivery_year < this_year:
+            return "overdue — no construction observed", "derived"
+        if cls == "approved":
+            return "consented", "observed"
+        return (a.status or a.decision or "unknown").lower(), "observed"
+
     pipeline = {
         "rollup": dict(pipe_rollup),
         "by_delivery_year": sorted(by_delivery.items()),
+        "overdue_beds": sum(
+            (a.pbsa_beds or 0) for a in apps
+            if delivery_status(a)[0].startswith("overdue")),
         "top": [
             {
                 "reference": a.reference,
                 "address": (a.address or (a.description or "")[:80]),
-                "status": a.status or a.decision,
+                "status": delivery_status(a)[0],
+                "status_basis": delivery_status(a)[1],
                 "beds": a.pbsa_beds,
                 "decision_date": a.decision_date.isoformat() if a.decision_date else None,
                 "applicant": a.applicant_name,
-                "delivery_year": a.expected_delivery_year,
+                "delivery_year": a.expected_delivery_year
+                if not delivery_status(a)[0].startswith("overdue") else None,
             }
             for a in top_apps
         ],
@@ -265,10 +292,25 @@ def gather_city_context(db: Session, council_name: str,
             model_growth=demand.get("cagr"),
         )
         afford = affordability(db, council.id, demand["max_loan"])
+        # Two distinct measures, never both "beds per student":
+        #   provision_rate  = beds / all FT students   (BONARD's definition)
+        #   coverage        = beds / estimated rental demand pool (ours, derived)
+        demand["provision_rate_pct"] = round(
+            100 * (total_beds + uni_beds) / demand["adjusted_students"], 1)
         if demand.get("pool") and demand["pool"]["pool"]:
             demand["pool"]["beds"] = total_beds + uni_beds
             demand["pool"]["coverage"] = round(
                 (total_beds + uni_beds) / demand["pool"]["pool"], 3)
+            demand["pool"]["coverage_pct"] = round(100 * demand["pool"]["coverage"], 1)
+
+    # ------------------------------------------------------------ finance
+    median_rent = db.execute(text("""
+        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY sr.rent_per_week)
+        FROM scheme_rents sr JOIN existing_schemes es ON es.id = sr.scheme_id
+        WHERE es.council_id = :cid AND sr.is_current AND sr.rent_per_week BETWEEN 60 AND 500
+    """), {"cid": council.id}).scalar()
+    finance = gather_finance_context(
+        db, council.id, float(median_rent) if median_rent else None, total_beds)
 
     # -------------------------------------------------------- HMO context
     # Advertised HMO sample from the StuRents crawl (file-based: listings
@@ -335,6 +377,7 @@ def gather_city_context(db: Session, council_name: str,
         "balance": balance,
         "afford": afford,
         "hmo": hmo,
+        "finance": finance,
         "ownership": ownership,
         "source_mix": sorted(source_mix.items(), key=lambda kv: -kv[1]),
     }

@@ -55,13 +55,20 @@ celery_app.conf.beat_schedule = {
                             month_of_year="2,5,8,11"),
         "options": {"queue": "scraping"},
     },
-    # Weekly availability check through the letting window (Aug-Oct):
-    # sold-out/limited states between rent captures are the revealed-
-    # demand series no annual report has.
-    "check-availability-letting-window": {
+    # Weekly availability check, all year: next year's rooms go on sale
+    # around October and sell through to August, so the sell-out date —
+    # the series' whole value — is only knowable if seen within a week.
+    "check-availability-weekly": {
         "task": "app.tasks.scraping_tasks.check_availability_weekly",
-        "schedule": crontab(hour=4, minute=0, day_of_week="monday",
-                            month_of_year="8,9,10"),
+        "schedule": crontab(hour=4, minute=0, day_of_week="monday"),
+        "options": {"queue": "scraping"},
+    },
+    # Weekly room-level rent + incentive capture through the booking
+    # season (Oct-Aug): price moves and discounts are the demand signal.
+    "capture-room-rents-booking-season": {
+        "task": "app.tasks.scraping_tasks.capture_room_rents_weekly",
+        "schedule": crontab(hour=5, minute=0, day_of_week="wednesday",
+                            month_of_year="1,2,3,4,5,6,7,8,10,11,12"),
         "options": {"queue": "scraping"},
     },
     # Enrichment schedules

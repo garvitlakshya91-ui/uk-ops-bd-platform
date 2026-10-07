@@ -36,6 +36,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.database import SessionLocal
 from app.models.models import Company, Council, ExistingScheme, PlanningApplication
+from app.models.observations import record_observation
 from app.scrapers.pbsa_scraper import extract_bed_count
 from app.scrapers.scheme_matching import best_match, build_index, norm_name, norm_pc
 from ai_room_rents import page_text
@@ -82,6 +83,8 @@ def main() -> None:
     ap.add_argument("--no-fetch", action="store_true",
                     help="skip operator-page fetching (planning only)")
     ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--dry-run-obs", action="store_true",
+                    help="do not append scheme_observations rows")
     args = ap.parse_args()
     slug = args.slug or args.city.lower()
 
@@ -215,12 +218,22 @@ def main() -> None:
             if beds_entry is None and s.beds_total:
                 beds_entry = entry(s.beds_total, s.source or "benchmark_report")
             prov["beds_total"] = beds_entry
+            if beds_entry and beds_entry["source"] != "benchmark_report" and not args.dry_run_obs:
+                record_observation(db, s, "beds_total", beds_entry["value"],
+                                   beds_entry["source"], reference=beds_entry.get("ref"),
+                                   basis="observed", refresh_cache=False)
+            if corroborated and not args.dry_run_obs:
+                record_observation(db, s, "operator", corroborated["value"],
+                                   corroborated["source"], refresh_cache=False)
 
             if consent is not None and consent.expected_delivery_year:
-                prov["build_year"] = entry(
-                    min(consent.expected_delivery_year, datetime.date.today().year),
-                    "planning_consent", ref=consent.reference,
-                    basis="estimated_from_consent")
+                est = min(consent.expected_delivery_year, datetime.date.today().year)
+                prov["build_year"] = entry(est, "planning_consent", ref=consent.reference,
+                                           basis="estimated_from_consent")
+                if not args.dry_run_obs:
+                    record_observation(db, s, "build_year", est, "planning_consent",
+                                       reference=consent.reference, basis="derived",
+                                       refresh_cache=False)
                 stats["build_year"] += 1
             elif s.build_year:
                 prov["build_year"] = entry(s.build_year, s.source or "benchmark_report")

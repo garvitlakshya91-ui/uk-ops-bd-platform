@@ -1677,3 +1677,27 @@ def check_availability_weekly() -> dict[str, Any]:
         results[council] = {"returncode": proc.returncode,
                             "tail": proc.stdout[-800:]}
     return results
+
+
+@celery_app.task(name="app.tasks.scraping_tasks.capture_room_rents_weekly")
+def capture_room_rents_weekly() -> dict[str, Any]:
+    """Weekly booking-season capture of room-level rents and incentives."""
+    import os
+    import subprocess
+    import sys as _sys
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return {"skipped": "ANTHROPIC_API_KEY not configured"}
+    pairs = os.environ.get("REPORT_CITIES", "Birmingham:birmingham")
+    script = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))), "ai_room_rents.py")
+    results: dict[str, Any] = {}
+    for pair in [p.strip() for p in pairs.split(",") if p.strip()]:
+        council = pair.partition(":")[0]
+        proc = subprocess.run(
+            [_sys.executable, script, "--city", council, "--limit", "200"],
+            capture_output=True, text=True, timeout=3 * 3600,
+        )
+        results[council] = {"returncode": proc.returncode,
+                            "tail": proc.stdout[-800:]}
+    return results

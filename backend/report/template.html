@@ -179,9 +179,14 @@
   {% endif %}
   {% if pipeline.top %}
   <h2>Largest live applications</h2>
+  {% if pipeline.overdue_beds %}
+  <p class="note">{{ "{:,}".format(pipeline.overdue_beds) }} consented beds are past their
+  expected delivery year with no construction evidence observed — treated as stalled
+  until evidence appears, not as supply.</p>
+  {% endif %}
   <table>
     <tr><th>Reference</th><th>Site</th><th>Applicant</th><th>Status</th>
-        <th class="num">Beds</th><th class="num">Est. delivery</th></tr>
+        <th class="num">Beds</th><th class="num">Est. delivery · derived</th></tr>
     {% for a in pipeline.top %}
     <tr>
       <td>{{ a.reference }}</td>
@@ -208,11 +213,13 @@
   <div class="kpis">
     <div class="kpi"><b>{{ "{:,}".format(demand.adjusted_students) }}</b>
       <span>FT students, {{ demand.latest_year }}</span></div>
-    {% if balance %}
-    <div class="kpi"><b>{{ balance.ratio_now }}</b>
-      <span>Beds per student, current</span></div>
-    <div class="kpi"><b>{{ balance.ratio_approved }}</b>
-      <span>With approved pipeline</span></div>
+    {% if demand.provision_rate_pct %}
+    <div class="kpi"><b>{{ demand.provision_rate_pct }}%</b>
+      <span>City PBSA provision rate · beds ÷ all FT students</span></div>
+    {% endif %}
+    {% if demand.pool and demand.pool.coverage_pct %}
+    <div class="kpi"><b>{{ demand.pool.coverage_pct }}%</b>
+      <span>Coverage of estimated rental demand · derived</span></div>
     {% endif %}
     {% if afford %}
     <div class="kpi"><b>{{ afford.above_pct }}%</b>
@@ -272,7 +279,7 @@
   {% endif %}
 
   {% if balance %}
-  <h2>Balance scenarios — beds per student in {{ balance.horizon }} years</h2>
+  <h2>Provision-rate scenarios — beds ÷ all FT students in {{ balance.horizon }} years · forecast</h2>
   <table>
     <tr><th>Demand growth p.a.</th>
       {% for c in balance.cases %}<th class="num">{{ c }}</th>{% endfor %}
@@ -306,6 +313,71 @@
   against £{{ hmo.pbsa_avg_ppw }}/week average for PBSA listings in the same
   sample{% endif %}. HMOs are the substitution ceiling on PBSA pricing —
   the gap is the premium the product has to justify.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- ========================================== page: investment -->
+{% if finance %}
+<div class="page">
+  <h2>Investment context</h2>
+  {% if finance.transactions %}
+  <p class="note">Recent PBSA transactions recorded for {{ city }}
+  {% if finance.avg_price_per_bed %} · average £{{ "{:,}".format(finance.avg_price_per_bed) }} per bed{% endif %}.</p>
+  <table>
+    <tr><th>Asset</th><th>Date</th><th>Buyer / seller</th><th class="num">Beds</th>
+        <th class="num">Price £m</th><th class="num">£/bed</th><th class="num">Yield</th><th>Basis</th></tr>
+    {% for t in finance.transactions %}
+    <tr>
+      <td>{{ t.asset }}{% if t.built %} <span class="flag">· built {{ t.built }}</span>{% endif %}</td>
+      <td>{{ t.date or "—" }}</td>
+      <td class="flag">{{ t.buyer or "—" }} / {{ t.seller or "—" }}</td>
+      <td class="num">{{ "{:,}".format(t.beds) if t.beds else "—" }}</td>
+      <td class="num">{{ "%.1f" | format(t.price_gbp / 1e6) if t.price_gbp else "—" }}</td>
+      <td class="num">{{ "{:,}".format(t.price_per_bed | int) if t.price_per_bed else "—" }}</td>
+      <td class="num">{{ "%.2f%%" | format(t.yield_pct) if t.yield_pct else "—" }}</td>
+      <td class="flag">{{ t.basis }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <div class="empty">No {{ city }} PBSA transactions are recorded yet. Transactions
+  load from deal announcements, Land Registry corporate-title price-paid data and
+  agent round-ups; this section fills as they are captured.</div>
+  {% endif %}
+
+  {% if finance.yields %}
+  <h2>Published prime yields · cited</h2>
+  <table>
+    <tr><th>Segment</th><th class="num">Net initial yield</th><th>As of</th></tr>
+    {% for y in finance.yields %}
+    <tr><td>{{ y.segment }}</td><td class="num">{{ "%.2f%%" | format(y.yield_pct) }}</td><td class="flag">{{ y.as_of }}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="note">Source: {{ finance.yields[0].source }}. Published figures, cited as context;
+  not derived from our data.</p>
+  {% endif %}
+
+  {% if finance.sensitivity %}
+  {% set sv = finance.sensitivity %}
+  <h2>Valuation sensitivity · forecast from our rent captures</h2>
+  <p>Median advertised rent of £{{ "%.0f" | format(sv.median_rent_ppw) }}/week over
+  {{ sv.assumptions.tenancy_weeks }} weeks at {{ "%.0f" | format(100 * sv.assumptions.occupancy) }}%
+  occupancy gives £{{ "{:,}".format(sv.gross_per_bed) }} gross and
+  £{{ "{:,}".format(sv.noi_per_bed) }} net per bed a year (operating costs assumed at
+  {{ "%.0f" | format(100 * sv.assumptions.opex_ratio) }}% of gross). Capitalised:</p>
+  <table>
+    <tr><th class="num">Net initial yield</th><th class="num">Value per bed</th>
+        <th class="num">Implied value of {{ "{:,}".format(sv.assumptions.private_beds) }} private beds</th></tr>
+    {% for g in sv.grid %}
+    <tr><td class="num">{{ "%.1f%%" | format(g.yield_pct) }}</td>
+        <td class="num">£{{ "{:,}".format(g.value_per_bed) }}</td>
+        <td class="num">£{{ "{:,}".format(g.market_value_m) }}m</td></tr>
+    {% endfor %}
+  </table>
+  <p class="note">A sensitivity, not a valuation: rents are advertised entry prices across the
+  schemes we capture; occupancy and cost ratios are stated assumptions to be replaced by
+  scheme-level evidence as the series builds.</p>
   {% endif %}
 </div>
 {% endif %}
@@ -350,6 +422,12 @@
   {% endif %}
 
   <h2 style="margin-top: 8mm;">Methodology &amp; sources</h2>
+  <p class="note"><b>Observed</b> figures are read directly from a source on a stated date
+  (census, rents, booking states, planning decisions, enrolments). <b>Derived</b> figures
+  are computed from observed ones by a stated rule (expected delivery year, demand pool,
+  overdue status, coverage of rental demand). <b>Forecast</b> figures project forward under
+  stated assumptions (provision-rate scenarios, valuation sensitivity). Column headers and
+  section titles carry the tag wherever a figure is not observed.</p>
   <p class="note">
     Scheme census assembled from operator directories, listings platforms, planning
     records and licensed market research, verified against multiple sources per

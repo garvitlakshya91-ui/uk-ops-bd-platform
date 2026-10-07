@@ -13,6 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Index,
     JSON,
+    Numeric,
     func,
     true,
 )
@@ -220,6 +221,12 @@ class PlanningApplication(Base):
         Integer, nullable=True,
         comment="Decision year + typical build time; approved/UC schemes only",
     )
+    construction_status: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True,
+        comment="not_started, under_construction, complete, lapsed",
+    )
+    construction_evidence_at: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    construction_source: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     submission_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     submitted_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     validated_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
@@ -763,6 +770,132 @@ class HesaTermTimeAccommodation(Base):
     __table_args__ = (
         UniqueConstraint("academic_year", "entrant_marker", "accommodation",
                          name="uq_hesa_tta"),
+    )
+
+
+class SchemeObservation(Base):
+    """One dated fact about a scheme — the master database's unit of record."""
+
+    __tablename__ = "scheme_observations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scheme_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="CASCADE"), nullable=False
+    )
+    field: Mapped[str] = mapped_column(String(60), nullable=False)
+    value_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    value_num: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    value_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    basis: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="observed", server_default="observed"
+    )
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    academic_year: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    observed_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_obs_scheme_field_time", "scheme_id", "field", "observed_at"),
+    )
+
+
+class SchemeRoomType(Base):
+    """Room mix: type, operator tier, count and size per scheme."""
+
+    __tablename__ = "scheme_room_types"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scheme_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="CASCADE"), nullable=False
+    )
+    room_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    sub_classification: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    rooms_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    room_size_sqm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    is_current: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
+    observed_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_room_types_scheme", "scheme_id", "is_current"),)
+
+
+class SchemeEvent(Base):
+    """Dated lifecycle events: opened, rebranded, sold, operator change…"""
+
+    __tablename__ = "scheme_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scheme_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="CASCADE"), nullable=False
+    )
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    event_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    detail: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    source: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    observed_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_events_scheme", "scheme_id", "event_date"),)
+
+
+class Transaction(Base):
+    """A PBSA investment transaction (asset, portfolio share, forward funding)."""
+
+    __tablename__ = "transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scheme_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="SET NULL"), nullable=True
+    )
+    council_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("councils.id", ondelete="SET NULL"), nullable=True
+    )
+    asset_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    transaction_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    price_gbp: Mapped[Optional[float]] = mapped_column(Numeric(14, 0), nullable=True)
+    beds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    price_per_bed_gbp: Mapped[Optional[float]] = mapped_column(Numeric(12, 0), nullable=True)
+    buyer: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    seller: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    yield_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    asset_built_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    deal_type: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    basis: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="observed", server_default="observed"
+    )
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    observed_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_transactions_council_date", "council_id", "transaction_date"),
+    )
+
+
+class YieldBenchmark(Base):
+    """Published prime-yield benchmarks by segment and date (cited, not ours)."""
+
+    __tablename__ = "yield_benchmarks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    segment: Mapped[str] = mapped_column(String(60), nullable=False)
+    yield_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    as_of: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    source: Mapped[str] = mapped_column(String(200), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("segment", "as_of", "source", name="uq_yield_seg_date_src"),
     )
 
 
