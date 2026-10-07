@@ -236,6 +236,33 @@
   ×-factors are campus adjustments: the share of an institution's students who study
   in {{ city }}.</p>
 
+  {% if demand.pool and demand.pool.coverage %}
+  {% set p = demand.pool %}
+  <h2>Demand pool — students actually in the PBSA market</h2>
+  <table>
+    <tr><th>Step</th><th class="num">Students</th><th>Basis</th></tr>
+    <tr><td>Full-time students ({{ demand.latest_year }})</td>
+        <td class="num">{{ "{:,}".format(demand.adjusted_students) }}</td>
+        <td class="flag">HESA enrolments, campus-adjusted</td></tr>
+    <tr><td>less: year-long placement or study abroad</td>
+        <td class="num">−{{ "{:,}".format(p.absent) }}</td>
+        <td class="flag">HESA tables 64/65, per provider ({{ p.absent_year }})</td></tr>
+    <tr><td>= Students in the city</td>
+        <td class="num">{{ "{:,}".format(p.in_city) }}</td><td></td></tr>
+    <tr><td>less: living at parental home ({{ "%.1f" | format(100 * p.shares.parental) }}%)
+        or own residence ({{ "%.1f" | format(100 * p.shares.own_residence) }}%)</td>
+        <td class="num">−{{ "{:,}".format(p.in_city - p.pool) }}</td>
+        <td class="flag">HESA chart 4, UK FT shares ({{ p.shares.year }})</td></tr>
+    <tr><td><b>= PBSA demand pool</b></td>
+        <td class="num"><b>{{ "{:,}".format(p.pool) }}</b></td><td></td></tr>
+  </table>
+  <p>{{ "{:,}".format(p.beds) }} PBSA beds serve a demand pool of
+  {{ "{:,}".format(p.pool) }} — <b>{{ p.coverage }} beds per pool student</b>.
+  Nationally {{ "%.1f" | format(100 * p.shares.pbsa_now) }}% of full-time students
+  live in halls. Living-at-home shares are national averages; commuter-heavy cities
+  run higher, so the pool is an upper bound.</p>
+  {% endif %}
+
   {% if balance %}
   <h2>Balance scenarios — beds per student in {{ balance.horizon }} years</h2>
   <table>

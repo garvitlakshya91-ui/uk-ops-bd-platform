@@ -228,6 +228,10 @@ def gather_city_context(db: Session, council_name: str) -> dict:
             model_growth=demand.get("cagr"),
         )
         afford = affordability(db, council.id, demand["max_loan"])
+        if demand.get("pool") and demand["pool"]["pool"]:
+            demand["pool"]["beds"] = total_beds + uni_beds
+            demand["pool"]["coverage"] = round(
+                (total_beds + uni_beds) / demand["pool"]["pool"], 3)
 
     # -------------------------------------------------------- HMO context
     # Advertised HMO sample from the StuRents crawl (file-based: listings

@@ -744,6 +744,24 @@ class MaintenanceLoan(Base):
     )
 
 
+class HesaTermTimeAccommodation(Base):
+    """UK full-time students by term-time accommodation (HESA chart 4)."""
+
+    __tablename__ = "hesa_term_time_accommodation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    academic_year: Mapped[str] = mapped_column(String(10), nullable=False)
+    entrant_marker: Mapped[str] = mapped_column(String(30), nullable=False)
+    accommodation: Mapped[str] = mapped_column(String(100), nullable=False)
+    students: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("academic_year", "entrant_marker", "accommodation",
+                         name="uq_hesa_tta"),
+    )
+
+
 class VisaIssuance(Base):
     """Sponsored-study visas granted per quarter (Home Office statistics)."""
 

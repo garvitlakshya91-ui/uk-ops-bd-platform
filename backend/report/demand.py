@@ -11,7 +11,42 @@ from __future__ import annotations
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.models.models import HesaEnrolment, Institution, MaintenanceLoan
+from app.models.models import (
+    HesaEnrolment, HesaTermTimeAccommodation, Institution, MaintenanceLoan,
+)
+
+ABSENCE_LEVELS = ("ft_placement_full_year", "ft_abroad_full_year")
+# Term-time situations outside the PBSA market (CBRE's deductions).
+NON_MARKET_ACCOMMODATION = ("Parental/guardian home",
+                            "Own residence (including rented)")
+
+
+def accommodation_shares(db: Session, year: str) -> dict | None:
+    """National FT term-time accommodation shares for the nearest year.
+
+    Shares exclude 'Not available' from the denominator.
+    """
+    years = sorted({r[0] for r in db.query(
+        HesaTermTimeAccommodation.academic_year).distinct()})
+    if not years:
+        return None
+    use = year if year in years else max((y for y in years if y <= year),
+                                         default=years[-1])
+    rows = (db.query(HesaTermTimeAccommodation)
+            .filter_by(academic_year=use, entrant_marker="All").all())
+    known = {r.accommodation: r.students for r in rows
+             if r.accommodation != "Not available"}
+    total = sum(known.values())
+    if not total:
+        return None
+    share = {k: v / total for k, v in known.items()}
+    return {
+        "year": use,
+        "parental": share.get("Parental/guardian home", 0.0),
+        "own_residence": share.get("Own residence (including rented)", 0.0),
+        "pbsa_now": share.get("Provider maintained property", 0.0)
+        + share.get("Private-sector halls", 0.0),
+    }
 
 FORWARD_YEARS = 5
 # Bear/bull bands around the modelled (historic-CAGR) growth rate.
@@ -61,6 +96,35 @@ def gather_demand_context(db: Session, council_id: int) -> dict | None:
         for i in institutions
     )
 
+    # Demand pool: FT students physically in the city (minus year-long
+    # placements and full-year study abroad, HESA tables 64/65) and in the
+    # rental market (minus parental home and own residence, HESA chart 4
+    # national shares).
+    absent_rows = (
+        db.query(HesaEnrolment)
+        .filter(HesaEnrolment.institution_id.in_([i.id for i in institutions]),
+                HesaEnrolment.level.in_(ABSENCE_LEVELS))
+        .all()
+    )
+    absent_years = sorted({r.academic_year for r in absent_rows})
+    absent_year = (latest if latest in absent_years
+                   else (absent_years[0] if absent_years and absent_years[0] > latest
+                         else (absent_years[-1] if absent_years else None)))
+    adj = {i.id: i.demand_adjustment for i in institutions}
+    absent = sum(r.full_time_students * adj[r.institution_id]
+                 for r in absent_rows if r.academic_year == absent_year)
+    shares = accommodation_shares(db, latest)
+    pool = None
+    if shares:
+        in_city = adjusted_students - absent
+        pool = {
+            "in_city": round(in_city),
+            "absent": round(absent),
+            "absent_year": absent_year,
+            "shares": shares,
+            "pool": round(in_city * (1 - shares["parental"] - shares["own_residence"])),
+        }
+
     loan = (
         db.query(MaintenanceLoan)
         .filter(MaintenanceLoan.region == "outside_london")
@@ -86,6 +150,7 @@ def gather_demand_context(db: Session, council_id: int) -> dict | None:
         "table": table,
         "totals": totals,
         "adjusted_students": round(adjusted_students),
+        "pool": pool,
         "loan_year": loan.academic_year if loan else None,
         "max_loan": loan.max_loan_gbp if loan else None,
         "sources": sources,
