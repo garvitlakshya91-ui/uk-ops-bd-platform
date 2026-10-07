@@ -98,6 +98,14 @@
 <!-- ============================================== page 2: census -->
 <div class="page">
   <h2>Scheme census — operational private PBSA</h2>
+  {% if publication and coverage %}
+  <p class="note">Own-source edition: {{ coverage.schemes_observed }} of
+  {{ coverage.schemes_known }} known schemes independently observed by our collection;
+  bed counts sourced for {{ coverage.beds_sourced }}, operators for
+  {{ coverage.operator_sourced }}, build years (estimated from consents) for
+  {{ coverage.build_year_sourced }}. Blank cells are not yet sourced and totals
+  cover sourced beds only.</p>
+  {% endif %}
   <p class="note">{{ census | length }} schemes. Beds are bed spaces, not units.
   Nominations flag marks schemes let under university agreements.</p>
   <table>
@@ -349,12 +357,23 @@
     parsed from application text. Ownership resolved through Companies House PSC
     chains and Land Registry corporate ownership data.
   </p>
+  {% if publication and coverage %}
+  <table>
+    <tr><th>Census field</th><th class="num">Sourced</th><th class="num">Known schemes</th></tr>
+    <tr><td>Scheme observed by our collection</td><td class="num">{{ coverage.schemes_observed }}</td><td class="num">{{ coverage.schemes_known }}</td></tr>
+    <tr><td>Bed count (operator page or planning consent)</td><td class="num">{{ coverage.beds_sourced }}</td><td class="num">{{ coverage.schemes_known }}</td></tr>
+    <tr><td>Operator (named in our listings)</td><td class="num">{{ coverage.operator_sourced }}</td><td class="num">{{ coverage.schemes_known }}</td></tr>
+    <tr><td>Build year (estimated from consent)</td><td class="num">{{ coverage.build_year_sourced }}</td><td class="num">{{ coverage.schemes_known }}</td></tr>
+    <tr><td>University properties observed</td><td class="num">{{ coverage.universities_observed }}</td><td class="num">{{ coverage.universities_known }}</td></tr>
+  </table>
+  {% else %}
   <table>
     <tr><th>Census source</th><th class="num">Schemes</th></tr>
     {% for source, n in source_mix %}
     <tr><td>{{ source }}</td><td class="num">{{ n }}</td></tr>
     {% endfor %}
   </table>
+  {% endif %}
   <p class="note">© UK Ops BD Intelligence. Prepared for internal / licensed use;
   not for redistribution. Figures as at {{ generated }}.</p>
 </div>

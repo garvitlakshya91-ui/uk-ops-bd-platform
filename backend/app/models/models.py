@@ -339,6 +339,10 @@ class ExistingScheme(Base):
         String(50), nullable=True,
         comment="live, closed, no_letting_presence, nominations_only",
     )
+    field_provenance: Mapped[Optional[dict]] = mapped_column(
+        JSONB, nullable=True,
+        comment="field -> {value, source, ref, at, basis}; see census_sources",
+    )
     contract_start_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     contract_end_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     performance_rating: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

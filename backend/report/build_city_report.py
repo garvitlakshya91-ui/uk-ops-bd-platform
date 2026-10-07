@@ -56,17 +56,21 @@ def main() -> None:
     ap.add_argument("--council", required=True)
     ap.add_argument("--out-dir", default="reports")
     ap.add_argument("--no-pdf", action="store_true")
+    ap.add_argument("--publication", action="store_true",
+                    help="Only publishable (own-sourced) figures; benchmark-only "
+                         "values are excluded and reported as coverage gaps")
     args = ap.parse_args()
 
     db = SessionLocal()
-    context = gather_city_context(db, args.council)
+    context = gather_city_context(db, args.council, publication=args.publication)
     db.close()
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.date.today().strftime("%Y%m%d")
     slug = context["city"].lower().replace(" ", "_")
-    html_path = out_dir / f"{slug}_pbsa_report_{stamp}.html"
+    suffix = "_publication" if args.publication else ""
+    html_path = out_dir / f"{slug}_pbsa_report_{stamp}{suffix}.html"
     html_path.write_text(render_html(context))
     print(f"HTML -> {html_path}")
 

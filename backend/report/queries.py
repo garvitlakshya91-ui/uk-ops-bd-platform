@@ -16,6 +16,7 @@ from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from app.models.models import Company, Council, ExistingScheme, PlanningApplication
+from app.census_sources import published_value
 from report.demand import affordability, balance_scenarios, gather_demand_context
 
 APPROVED_RE = re.compile(r"approv|permit|grant|consent", re.I)
@@ -49,7 +50,14 @@ def classify_status(status: str | None, decision: str | None) -> str:
     return "other"
 
 
-def gather_city_context(db: Session, council_name: str) -> dict:
+def gather_city_context(db: Session, council_name: str,
+                        publication: bool = False) -> dict:
+    """Assemble the report context.
+
+    publication=True keeps only values from sources we may publish
+    (app.census_sources): schemes our scrapers have not observed are
+    left out, and benchmark-only fields are blank and counted as gaps.
+    """
     council = db.query(Council).filter(Council.name.ilike(council_name)).first()
     if council is None:
         raise SystemExit(f"Council {council_name!r} not found")
@@ -73,15 +81,44 @@ def gather_city_context(db: Session, council_name: str) -> dict:
         op = operator_rows.get(s.operator_company_id)
         return op is not None and (op.company_type or "") == "University"
 
-    schemes = [s for s in all_pbsa if not _is_university(s)]
+    def _beds_of(s: ExistingScheme) -> int:
+        if publication:
+            return published_value(s, "beds_total") or 0
+        return _beds(s)
+
+    def _build_year_of(s: ExistingScheme):
+        return published_value(s, "build_year") if publication else s.build_year
+
+    def _operator_of(s: ExistingScheme):
+        if publication:
+            return published_value(s, "operator")
+        return operators.get(s.operator_company_id)
+
+    candidates = [s for s in all_pbsa if not _is_university(s)]
+    unis = [s for s in all_pbsa if _is_university(s)]
+    coverage = None
+    if publication:
+        observed = [s for s in candidates if published_value(s, "observed")]
+        coverage = {
+            "schemes_known": len(candidates),
+            "schemes_observed": len(observed),
+            "beds_sourced": sum(1 for s in observed if published_value(s, "beds_total")),
+            "operator_sourced": sum(1 for s in observed if published_value(s, "operator")),
+            "build_year_sourced": sum(1 for s in observed if published_value(s, "build_year")),
+            "universities_known": len(unis),
+            "universities_observed": sum(1 for s in unis if published_value(s, "observed")),
+        }
+        candidates = observed
+        unis = [s for s in unis if published_value(s, "observed")]
+    schemes = candidates
     university_stock = sorted((
         {
             "name": s.name,
             "university": operators.get(s.operator_company_id),
             "postcode": s.postcode,
-            "beds": _beds(s),
+            "beds": _beds_of(s),
         }
-        for s in all_pbsa if _is_university(s)
+        for s in unis
     ), key=lambda r: -r["beds"])
 
     # Cheapest current advertised rent per scheme (append-only rows)
@@ -96,10 +133,10 @@ def gather_city_context(db: Session, council_name: str) -> dict:
     census = sorted((
         {
             "name": s.name,
-            "operator": operators.get(s.operator_company_id),
+            "operator": _operator_of(s),
             "postcode": s.postcode,
-            "beds": _beds(s),
-            "build_year": s.build_year,
+            "beds": _beds_of(s),
+            "build_year": _build_year_of(s),
             "operating_status": s.operating_status or "live",
             "nominations": bool(s.nominations),
             "from_rent_ppw": min_rent.get(s.id),
@@ -277,6 +314,8 @@ def gather_city_context(db: Session, council_name: str) -> dict:
     return {
         "city": council.name,
         "generated": datetime.date.today().isoformat(),
+        "publication": publication,
+        "coverage": coverage,
         "census": census,
         "kpis": {
             "pbsa_schemes": len(live),
