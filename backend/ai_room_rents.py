@@ -95,7 +95,7 @@ def fetch(url: str, browser) -> str | None:
 
 def extract(client, html: str) -> dict:
     msg = client.messages.create(
-        model=MODEL, max_tokens=2000,
+        model=MODEL, max_tokens=4000,
         messages=[{"role": "user", "content": PROMPT + page_text(html)}],
     )
     raw = msg.content[0].text
