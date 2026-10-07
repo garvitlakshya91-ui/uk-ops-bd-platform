@@ -43,6 +43,8 @@ MAINTENANCE_LOANS = {
     "2023-24": {"outside_london": 9978, "london": 13022, "parental_home": 8400},
     "2024-25": {"outside_london": 10227, "london": 13348, "parental_home": 8610},
     "2025-26": {"outside_london": 10544, "london": 13762, "parental_home": 8877},
+    # 2026-27 read from gov.uk/student-finance/new-fulltime-students on 7 Oct 2026
+    "2026-27": {"outside_london": 10830, "london": 14135, "parental_home": 9118},
 }
 LOAN_SOURCE = "gov.uk student finance rates (approximate)"
 
