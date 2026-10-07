@@ -7,8 +7,10 @@ as "not available" rather than failing the report.
 from __future__ import annotations
 
 import datetime
+import json
 import re
 from collections import defaultdict
+from pathlib import Path
 
 from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
@@ -226,6 +228,42 @@ def gather_city_context(db: Session, council_name: str) -> dict:
         )
         afford = affordability(db, council.id, demand["max_loan"])
 
+    # -------------------------------------------------------- HMO context
+    # Advertised HMO sample from the StuRents crawl (file-based: listings
+    # are market context, not census schemes). Honest framing: a crawl
+    # sample, not a whole-market share.
+    hmo = None
+    sturents_file = Path(__file__).resolve().parent.parent / "data" / "sturents" / (
+        council.name.lower().replace(" ", "-") + ".jsonl")
+    if sturents_file.exists():
+        hmo_rents, pbsa_rents, hmo_beds = [], [], []
+        total = 0
+        for line in sturents_file.read_text().splitlines():
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            total += 1
+            price = rec.get("rent_pppw_min") or rec.get("rent_pppw_max")
+            if rec.get("is_pbsa_candidate"):
+                if price:
+                    pbsa_rents.append(float(price))
+            else:
+                if price:
+                    hmo_rents.append(float(price))
+                if rec.get("beds"):
+                    hmo_beds.append(int(rec["beds"]))
+        if hmo_rents:
+            hmo_rents.sort()
+            hmo = {
+                "sample": total,
+                "hmo_listings": len(hmo_rents),
+                "median_ppw": round(hmo_rents[len(hmo_rents) // 2]),
+                "avg_ppw": round(sum(hmo_rents) / len(hmo_rents)),
+                "avg_beds": round(sum(hmo_beds) / len(hmo_beds), 1) if hmo_beds else None,
+                "pbsa_avg_ppw": round(sum(pbsa_rents) / len(pbsa_rents))
+                if pbsa_rents else None,
+            }
+
     # ------------------------------------------------------------ sources
     source_mix = defaultdict(int)
     for s in schemes:
@@ -252,6 +290,7 @@ def gather_city_context(db: Session, council_name: str) -> dict:
         "demand": demand,
         "balance": balance,
         "afford": afford,
+        "hmo": hmo,
         "ownership": ownership,
         "source_mix": sorted(source_mix.items(), key=lambda kv: -kv[1]),
     }

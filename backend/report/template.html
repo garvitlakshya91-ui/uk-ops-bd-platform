@@ -261,6 +261,17 @@
   51-week tenancy. {{ afford.above_pct }}% of the {{ afford.rows }} advertised rent
   rows captured this quarter exceed the full loan, before any other living costs.</p>
   {% endif %}
+
+  {% if hmo %}
+  <h2>HMO market context</h2>
+  <p>From a crawl sample of {{ "{:,}".format(hmo.sample) }} live student listings,
+  {{ "{:,}".format(hmo.hmo_listings) }} priced HMO lets advertise a median
+  £{{ hmo.median_ppw }}/week per person (mean £{{ hmo.avg_ppw }}{% if hmo.avg_beds %},
+  average {{ hmo.avg_beds }} beds per house{% endif %}){% if hmo.pbsa_avg_ppw %},
+  against £{{ hmo.pbsa_avg_ppw }}/week average for PBSA listings in the same
+  sample{% endif %}. HMOs are the substitution ceiling on PBSA pricing —
+  the gap is the premium the product has to justify.</p>
+  {% endif %}
 </div>
 {% endif %}
 
