@@ -62,7 +62,17 @@ BUILD_YEARS_OUTLINE = 4
 MIN_SCHEME_BEDS = 50
 
 
+DECIDED_APPROVED_RE = re.compile(r"approv|permit|grant|consent|conditions", re.I)
+DECIDED_REFUSED_RE = re.compile(r"refus|reject|dismiss", re.I)
+
+
 def classify_status(status: str | None, decision: str | None) -> str:
+    # A recorded decision outranks a status field that some council feeds
+    # leave at "Pending" after the decision ("Pending / Conditions").
+    if decision and DECIDED_REFUSED_RE.search(decision):
+        return "refused"
+    if decision and DECIDED_APPROVED_RE.search(decision) and not re.search(r"withdraw", status or "", re.I):
+        return "approved"
     blob = f"{status or ''} {decision or ''}"
     if re.search(r"withdraw", blob, re.I):
         return "withdrawn"
@@ -173,7 +183,10 @@ def main() -> None:
     ops = {c.id: c for c in db.query(Company).filter(
         Company.id.in_([s.operator_company_id for s in schemes if s.operator_company_id] or [0]))}
     live_by_pc: dict[str, list[ExistingScheme]] = defaultdict(list)
-    for s in schemes:
+    # Census schemes only where the council has a census: other PBSA records
+    # (listing fragments, EPC lodgements) are not evidence that a site is built.
+    census = [s for s in schemes if s.operating_status] or schemes
+    for s in census:
         if (s.operating_status or "live") in ("live", "no_letting_presence") and s.postcode:
             live_by_pc[norm_pc(s.postcode)].append(s)
     uni_names = [norm_name(s.name) for s in schemes
@@ -268,11 +281,23 @@ def main() -> None:
             status, ev = "superseded", f"later consent {a.superseded_by_reference} for the same site"
         else:
             hits = [s for s in live_by_pc.get(site_key(a), []) if implements(a, s)]
-            on_live_site = bool(live_by_pc.get(site_key(a)))
+            site_schemes = live_by_pc.get(site_key(a), [])
+            if not site_schemes:
+                # Feeds disagree on postcodes: an operating scheme named in the
+                # address, in the same postcode district, is the same site.
+                addr = " " + re.sub(r"[^a-z0-9]+", " ", (a.address or "").lower()) + " "
+                district = site_key(a)[:-3] if len(site_key(a)) > 3 else ""
+
+                def phrase(n: str) -> str:
+                    return re.sub(r"^the ", "", re.sub(r"[^a-z0-9]+", " ", n.lower()).strip())
+                site_schemes = [s for s in census if len(phrase(s.name)) >= 5
+                                and f" {phrase(s.name)} " in addr
+                                and (not district or norm_pc(s.postcode).startswith(district))]
+            on_live_site = bool(site_schemes)
             if cls == "approved" and on_live_site and (a.pbsa_beds or 0) < MIN_SCHEME_BEDS:
                 # Alterations, extensions and re-fits of a scheme that is
                 # already operating: not pipeline, not a new consent.
-                s = live_by_pc[site_key(a)][0]
+                s = site_schemes[0]
                 status, ev = "ancillary", f"works to the operating scheme {s.name} at the same postcode" + (f" ({a.pbsa_beds} beds)" if a.pbsa_beds else "")
             elif cls == "approved" and hits and (a.pbsa_beds or 0) >= MIN_SCHEME_BEDS \
                     and not EXTENSION_RE.search(a.description or ""):

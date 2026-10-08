@@ -247,20 +247,23 @@ def balance_scenarios(students: float, beds_now: int,
     }
 
 
-def affordability(db: Session, council_id: int, max_loan: int | None) -> dict | None:
+def affordability(db: Session, scheme_ids: list[int], max_loan: int | None,
+                  excluded=("From (advertised)", "To (advertised)", "Range"),
+                  nonstudent=()) -> dict | None:
     if not max_loan:
         return None
-    # Room-tier observations only: a scheme's "from" price is its cheapest
-    # tier and would understate the share of rooms above the loan.
+    # Room-tier observations on census schemes only: a scheme's "from"
+    # price is its cheapest tier and would understate the share of rooms
+    # above the loan; area and social rents are not student rooms.
     rows = db.execute(text("""
         SELECT sr.rent_per_week, COALESCE(sr.contract_length_weeks, :wk) AS weeks
         FROM scheme_rents sr
-        JOIN existing_schemes es ON es.id = sr.scheme_id
-        WHERE es.council_id = :cid AND sr.is_current
+        WHERE sr.scheme_id = ANY(:sids) AND sr.is_current
           AND sr.rent_per_week BETWEEN 60 AND 700
           AND sr.room_type IS NOT NULL
-          AND sr.room_type NOT IN ('From (advertised)', 'To (advertised)', 'Range')
-    """), {"cid": council_id, "wk": ASSUMED_TENANCY_WEEKS}).fetchall()
+          AND sr.room_type <> ALL(:excluded) AND sr.source <> ALL(:nonstudent)
+    """), {"sids": list(scheme_ids) or [0], "wk": ASSUMED_TENANCY_WEEKS,
+           "excluded": list(excluded), "nonstudent": list(nonstudent)}).fetchall()
     if not rows:
         return None
     annual = [float(r[0]) * float(r[1]) for r in rows]

@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.models.models import Company, Council, ExistingScheme, PlanningApplication
 from app.census_sources import published_value
+from app.scrapers.scheme_matching import name_score, norm_name, norm_pc
 from report.demand import affordability, balance_scenarios, gather_demand_context
 from report.finance import gather_finance_context
 
@@ -46,7 +47,12 @@ STATUS_LABELS = {
     "child": "Child application (conditions, amendments, listed building)",
     "refused": "Refused", "withdrawn": "Withdrawn",
 }
-TIER_ROOM_TYPES_EXCLUDED = ("From (advertised)", "To (advertised)", "Range")
+# Entry-price and range labels from directory feeds: not room tiers.
+TIER_ROOM_TYPES_EXCLUDED = ("From (advertised)", "To (advertised)", "Range", "From", "To",
+                            "Advertised", "Various", "General")
+# Rent feeds that describe the wider housing market, not student rooms
+# (ONS area averages, social rents, Rightmove lets attached for BD context).
+NON_STUDENT_RENT_SOURCES = ("ons_pipr_area", "rsh_sdr_la", "rightmove")
 INCENTIVE_CASH_RE = re.compile(r"£\s?([\d,]{2,6})(?!\s*(?:/|per|a)\s*(?:week|wk|pw))", re.I)
 INCENTIVE_WEEKLY_RE = re.compile(r"£\s?(\d{1,3})\s*(?:off\s+)?(?:a|per|/)\s*(?:week|wk)|£\s?(\d{1,3})\s*(?:pw|p/w)\s*off", re.I)
 
@@ -67,6 +73,12 @@ def _column_exists(db: Session, table: str, column: str) -> bool:
 
 
 def classify_status(status: str | None, decision: str | None) -> str:
+    # A recorded decision outranks a stale status ("Pending / Conditions").
+    if decision and re.search(r"refus|reject|dismiss", decision, re.I):
+        return "refused"
+    if decision and re.search(r"approv|permit|grant|consent|conditions", decision, re.I) \
+            and not re.search(r"withdraw", status or "", re.I):
+        return "approved"
     blob = f"{status or ''} {decision or ''}"
     if REFUSED_RE.search(blob):
         return "refused"
@@ -119,10 +131,22 @@ def gather_city_context(db: Session, council_name: str,
     def _operator_of(s: ExistingScheme):
         if publication:
             return published_value(s, "operator")
-        return operators.get(s.operator_company_id)
+        # The census brand where one is recorded, else the linked company
+        # (which may be a legal entity name from another feed).
+        brand = ((s.field_provenance or {}).get("operator") or {}).get("value")
+        return brand or operators.get(s.operator_company_id)
 
-    candidates = [s for s in all_pbsa if not _is_university(s)]
-    unis = [s for s in all_pbsa if _is_university(s)]
+    # The census is the reconciled set: schemes the census workflow has
+    # given an operating status. Other PBSA records in the council (other
+    # feeds, listing fragments, EPC lodgements) are listed for review, not
+    # counted, until they are reconciled. A council never reconciled keeps
+    # every PBSA record.
+    reconciled = [s for s in all_pbsa if s.operating_status]
+    census_pool = reconciled or all_pbsa
+    unreconciled = [s for s in all_pbsa if s not in census_pool]
+    candidates = [s for s in census_pool if not _is_university(s)]
+    unis = [s for s in census_pool if _is_university(s)]
+    census_scheme_ids = [s.id for s in census_pool] or [0]
     coverage = None
     if publication:
         observed = [s for s in candidates if published_value(s, "observed")]
@@ -151,10 +175,10 @@ def gather_city_context(db: Session, council_name: str,
     # Cheapest current advertised rent per scheme (append-only rows)
     rent_rows = db.execute(text("""
         SELECT scheme_id, MIN(rent_per_week) FROM scheme_rents
-        WHERE is_current AND rent_per_week IS NOT NULL
-          AND scheme_id = ANY(:sids)
+        WHERE is_current AND rent_per_week BETWEEN 60 AND 700
+          AND scheme_id = ANY(:sids) AND source <> ALL(:nonstudent)
         GROUP BY scheme_id
-    """), {"sids": [s.id for s in all_pbsa] or [0]}).fetchall()
+    """), {"sids": census_scheme_ids, "nonstudent": list(NON_STUDENT_RENT_SOURCES)}).fetchall()
     min_rent = {r[0]: r[1] for r in rent_rows}
 
     census = sorted((
@@ -173,10 +197,38 @@ def gather_city_context(db: Session, council_name: str,
     live = [r for r in census if r["operating_status"] != "closed"]
     total_beds = sum(r["beds"] for r in live)
 
+    # Unreconciled PBSA records, flagged where they look like a census
+    # scheme under another name or postcode.
+    def _dup_of(u: ExistingScheme):
+        upc, utok = norm_pc(u.postcode), norm_name(u.name)
+        for c in census_pool:
+            if upc and upc == norm_pc(c.postcode):
+                return c.name
+            if utok and name_score(utok, norm_name(c.name)) >= 0.66:
+                return c.name
+        return None
+    unreconciled_list = sorted((
+        {"name": u.name, "postcode": u.postcode, "source": u.source,
+         "units": u.beds_total or u.num_units or u.total_units,
+         "operator": operators.get(u.operator_company_id),
+         "possible_duplicate_of": _dup_of(u)}
+        for u in unreconciled), key=lambda r: (r["possible_duplicate_of"] is not None, -(r["units"] or 0)))
+
     # ---------------------------------------------------- operator shares
-    by_operator = defaultdict(int)
+    # Group operator labels that differ only in case, punctuation or legal
+    # suffix ("YUGO" / "Yugo", "Collegiate AC" stays distinct from others);
+    # each group is shown under its most-bedded spelling.
+    def _op_key(name: str) -> str:
+        words = re.sub(r"[^a-z0-9 ]", " ", name.lower()).split()
+        return " ".join(w for w in words if w not in ("ltd", "limited", "plc", "the"))
+    variants: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for r in live:
-        by_operator[r["operator"] or "Operator unconfirmed"] += r["beds"]
+        name = r["operator"] or "Operator unconfirmed"
+        variants[_op_key(name)][name] += r["beds"]
+    by_operator = {max(v, key=v.get): sum(v.values()) for v in variants.values()}
+    for r in live:
+        if r["operator"]:
+            r["operator"] = max(variants[_op_key(r["operator"])], key=variants[_op_key(r["operator"])].get)
     operator_shares = sorted(
         ({"operator": k, "beds": v,
           "share": round(100 * v / total_beds, 1) if total_beds else 0}
@@ -310,10 +362,12 @@ def gather_city_context(db: Session, council_name: str,
         owner_names = {
             c.id: c for c in db.query(Company).filter(Company.id.in_(owner_ids))
         }
-        by_owner = defaultdict(int)
+        owner_variants: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         for s in schemes:
             if s.owner_company_id and s.owner_company_id in owner_names:
-                by_owner[owner_names[s.owner_company_id].name] += _beds(s)
+                nm = owner_names[s.owner_company_id].name
+                owner_variants[_op_key(nm)][nm] += _beds(s)
+        by_owner = {max(v, key=v.get): sum(v.values()) for v in owner_variants.values()}
         ownership["owners"] = sorted(
             ({"owner": k, "beds": v} for k, v in by_owner.items()),
             key=lambda r: -r["beds"],
@@ -321,13 +375,14 @@ def gather_city_context(db: Session, council_name: str,
         ownership["available"] = bool(ownership["owners"])
     if _column_exists(db, "companies", "ultimate_owner_name"):
         rows = db.execute(text("""
-            SELECT co.ultimate_owner_name, COUNT(*) AS n
+            SELECT co.ultimate_owner_name, COUNT(*) AS n,
+                   SUM(COALESCE(es.beds_total, es.num_units, es.total_units, 0)) AS beds
             FROM existing_schemes es
-            JOIN companies co ON co.id = COALESCE(es.owner_company_id, es.operator_company_id)
-            WHERE es.council_id = :cid AND co.ultimate_owner_name IS NOT NULL
-            GROUP BY 1 ORDER BY n DESC LIMIT 10
-        """), {"cid": council.id}).fetchall()
-        ownership["ultimate"] = [{"owner": r[0], "schemes": r[1]} for r in rows]
+            JOIN companies co ON co.id = es.owner_company_id
+            WHERE es.id = ANY(:sids) AND co.ultimate_owner_name IS NOT NULL
+            GROUP BY 1 ORDER BY beds DESC, n DESC LIMIT 10
+        """), {"sids": census_scheme_ids}).fetchall()
+        ownership["ultimate"] = [{"owner": r[0], "schemes": r[1], "beds": r[2]} for r in rows]
         ownership["available"] = ownership["available"] or bool(ownership["ultimate"])
     if _table_exists(db, "ownership_chain_nodes"):
         ownership["chains"] = db.execute(
@@ -356,7 +411,9 @@ def gather_city_context(db: Session, council_name: str,
             approved, identified,
             model_growth=demand.get("cagr"),
         )
-        afford = affordability(db, council.id, demand["max_loan"])
+        afford = affordability(db, census_scheme_ids, demand["max_loan"],
+                               excluded=TIER_ROOM_TYPES_EXCLUDED,
+                               nonstudent=NON_STUDENT_RENT_SOURCES)
         # Two distinct measures, never both "beds per student":
         #   provision_rate  = beds / all FT students   (BONARD's definition)
         #   coverage        = beds / estimated rental demand pool (ours, derived)
@@ -379,8 +436,8 @@ def gather_city_context(db: Session, council_name: str,
               FROM scheme_availability ORDER BY scheme_id, captured_at DESC)
             SELECT es.name, l.state, l.captured_at::date, es.beds_total, es.build_year
             FROM latest l JOIN existing_schemes es ON es.id = l.scheme_id
-            WHERE es.council_id = :cid AND es.scheme_type = 'PBSA'
-        """), {"cid": council.id}).fetchall()
+            WHERE es.id = ANY(:sids)
+        """), {"sids": census_scheme_ids}).fetchall()
         if rows:
             sold = [r for r in rows if r[1] == "sold_out"]
             letting = {
@@ -402,11 +459,11 @@ def gather_city_context(db: Session, council_name: str,
                    percentile_cont(0.25) WITHIN GROUP (ORDER BY sr.rent_per_week),
                    percentile_cont(0.5)  WITHIN GROUP (ORDER BY sr.rent_per_week),
                    percentile_cont(0.75) WITHIN GROUP (ORDER BY sr.rent_per_week)
-            FROM scheme_rents sr JOIN existing_schemes es ON es.id = sr.scheme_id
-            WHERE es.council_id = :cid AND sr.is_current AND sr.source = 'operator_page'
+            FROM scheme_rents sr
+            WHERE sr.scheme_id = ANY(:sids) AND sr.is_current AND sr.source = 'operator_page'
               AND sr.rent_per_week BETWEEN 60 AND 500 AND sr.room_type IS NOT NULL
             GROUP BY sr.room_type HAVING COUNT(*) >= 3 ORDER BY COUNT(*) DESC
-        """), {"cid": council.id}).fetchall()
+        """), {"sids": census_scheme_ids}).fetchall()
     ]
 
     # ---------------------------------------------------- rent headline
@@ -415,14 +472,21 @@ def gather_city_context(db: Session, council_name: str,
     # and pulls any pooled median down.
     hl = db.execute(text("""
         SELECT COUNT(*), COUNT(DISTINCT sr.scheme_id),
-               percentile_cont(0.5) WITHIN GROUP (ORDER BY sr.rent_per_week)
-        FROM scheme_rents sr JOIN existing_schemes es ON es.id = sr.scheme_id
-        WHERE es.council_id = :cid AND sr.is_current AND sr.rent_per_week BETWEEN 60 AND 700
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY sr.rent_per_week),
+               MIN(COALESCE(sr.scraped_at, sr.created_at))::date,
+               MAX(COALESCE(sr.scraped_at, sr.created_at))::date
+        FROM scheme_rents sr
+        WHERE sr.scheme_id = ANY(:sids) AND sr.is_current AND sr.rent_per_week BETWEEN 60 AND 700
+          AND COALESCE(sr.scraped_at, sr.created_at) > now() - interval '365 days'
           AND sr.room_type IS NOT NULL AND sr.room_type <> ALL(:excluded)
-    """), {"cid": council.id, "excluded": list(TIER_ROOM_TYPES_EXCLUDED)}).fetchone()
+          AND sr.source <> ALL(:nonstudent)
+    """), {"sids": census_scheme_ids, "excluded": list(TIER_ROOM_TYPES_EXCLUDED),
+           "nonstudent": list(NON_STUDENT_RENT_SOURCES)}).fetchone()
     rent_headline = None
     if hl and hl[0]:
-        rent_headline = {"n": hl[0], "schemes": hl[1], "median": round(float(hl[2]))}
+        rent_headline = {"n": hl[0], "schemes": hl[1], "median": round(float(hl[2])),
+                         "from": hl[3].isoformat() if hl[3] else None,
+                         "to": hl[4].isoformat() if hl[4] else None}
     median_rent = rent_headline["median"] if rent_headline else None
 
     # -------------------------------------------- incentives, effective rent
@@ -436,7 +500,8 @@ def gather_city_context(db: Session, council_name: str,
               SELECT scheme_id, percentile_cont(0.5) WITHIN GROUP (ORDER BY rent_per_week) AS med,
                      MAX(contract_length_weeks) AS weeks
               FROM scheme_rents WHERE is_current AND rent_per_week BETWEEN 60 AND 700
-                AND room_type <> ALL(:excluded) GROUP BY scheme_id),
+                AND room_type <> ALL(:excluded) AND source <> ALL(:nonstudent)
+                AND scheme_id = ANY(:sids) GROUP BY scheme_id),
             inc AS (
               SELECT DISTINCT ON (scheme_id, value_text) scheme_id, value_text, observed_at
               FROM scheme_observations WHERE field = 'incentive' AND value_text IS NOT NULL
@@ -444,8 +509,9 @@ def gather_city_context(db: Session, council_name: str,
             SELECT es.name, inc.value_text, t.med, t.weeks
             FROM inc JOIN existing_schemes es ON es.id = inc.scheme_id
             JOIN tiers t ON t.scheme_id = inc.scheme_id
-            WHERE es.council_id = :cid ORDER BY es.name
-        """), {"cid": council.id, "excluded": list(TIER_ROOM_TYPES_EXCLUDED)}).fetchall()
+            ORDER BY es.name
+        """), {"sids": census_scheme_ids, "excluded": list(TIER_ROOM_TYPES_EXCLUDED),
+               "nonstudent": list(NON_STUDENT_RENT_SOURCES)}).fetchall()
         by_scheme: dict[str, dict] = {}
         for name, txt, med, weeks in inc_rows:
             cash = sum(int(m.group(1).replace(",", "")) for m in INCENTIVE_CASH_RE.finditer(txt or "")
@@ -529,6 +595,7 @@ def gather_city_context(db: Session, council_name: str,
             "btr_units": sum(_beds(s) or 0 for s in btr),
         },
         "rent_headline": rent_headline,
+        "unreconciled": unreconciled_list,
         "effective_rents": effective_rents,
         "letting": letting,
         "operator_shares": operator_shares,

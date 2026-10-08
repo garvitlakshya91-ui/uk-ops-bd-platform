@@ -134,6 +134,24 @@
   {{ generated }} ({{ rent_coverage }} of {{ census | length }} schemes); it is a scheme
   attribute, not a market rent. Room-tier observations are reported separately.</p>
 
+  {% if unreconciled %}
+  <h2>Other PBSA records · not yet reconciled, not counted</h2>
+  <table>
+    <tr><th>Record</th><th>Postcode</th><th>Operator</th><th>Feed</th><th class="num">Units</th><th>Review note</th></tr>
+    {% for u in unreconciled %}
+    <tr>
+      <td>{{ u.name }}</td><td>{{ u.postcode or "—" }}</td><td>{{ u.operator or "—" }}</td>
+      <td class="flag">{{ u.source or "—" }}</td>
+      <td class="num">{{ "{:,}".format(u.units) if u.units else "—" }}</td>
+      <td class="flag">{% if u.possible_duplicate_of %}possible duplicate of {{ u.possible_duplicate_of }}{% else %}candidate: verify and admit or discard{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="note">Records from other feeds (operator directories, listings, EPC lodgements) that the
+  census has not matched. They are excluded from every total until verified: a candidate may be
+  missing supply, a listing fragment or a scheme still under construction.</p>
+  {% endif %}
+
   {% if university_stock %}
   <h2>University-owned stock</h2>
   <table>
@@ -385,7 +403,8 @@
   {% if rent_headline %}
   <h2>Advertised rents</h2>
   <p><b>£{{ rent_headline.median }}/week</b> is the median of {{ rent_headline.n }} advertised
-  room-tier observations across {{ rent_headline.schemes }} schemes, captured {{ generated }}.
+  room-tier observations across {{ rent_headline.schemes }} schemes, captured
+  {% if rent_headline.from and rent_headline.from != rent_headline.to %}between {{ rent_headline.from }} and {{ rent_headline.to }}{% else %}{{ rent_headline.to or generated }}{% endif %}.
   It is a median of advertised price points, not a bed-weighted market rent: tiers are not yet
   weighted by the number of rooms of each type, contract lengths differ, and incentives are
   netted off separately below.</p>
@@ -533,9 +552,9 @@
     <div>
       <h2 style="border:none; font-size: 11pt;">Ultimate owners (via SPV chains)</h2>
       <table>
-        <tr><th>Ultimate owner</th><th class="num">Schemes</th></tr>
+        <tr><th>Ultimate owner</th><th class="num">Schemes</th><th class="num">Beds</th></tr>
         {% for r in ownership.ultimate %}
-        <tr><td>{{ r.owner }}</td><td class="num">{{ r.schemes }}</td></tr>
+        <tr><td>{{ r.owner }}</td><td class="num">{{ r.schemes }}</td><td class="num">{{ "{:,}".format(r.beds) if r.beds else "—" }}</td></tr>
         {% endfor %}
       </table>
     </div>
