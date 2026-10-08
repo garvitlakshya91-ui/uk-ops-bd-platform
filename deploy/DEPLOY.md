@@ -67,8 +67,11 @@ docker compose -f docker-compose.prod.yml --env-file .env.production up -d --bui
 - Celery beat drives the scheduled scrapers; keep an eye on disk and on
   `scraper_runs` for failures.
 - Set `SENTRY_DSN` for error reporting before sharing the URL with users.
-- Back up with:
-  `docker compose -f docker-compose.prod.yml exec postgres pg_dump -U postgres -Fc -Z 6 uk_ops_bd > backup_$(date +%F).dump`
+- Back up with `deploy/backup_db.sh --compose docker-compose.prod.yml --env-file .env.production`
+  (Linux/macOS, native Postgres or Compose) or `.\scripts\backup_db.ps1` (Windows, native
+  Postgres). Both write a verified `.dump`, a schema-only `.sql` and a manifest with row counts
+  into `backups/`, and keep the newest five sets. Copy the `.dump` off the machine every time;
+  a nightly cron or Task Scheduler entry running the script is the minimum for production.
 
 ## After the data restore: finance and ownership derivations
 
