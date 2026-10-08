@@ -42,6 +42,7 @@ STATUS_LABELS = {
     "dormant": "Dormant consent (no register activity in 3+ years)",
     "completed": "Completed (in the operational census)",
     "superseded": "Superseded by a later consent",
+    "ancillary": "Works to an operating scheme (not pipeline)",
     "child": "Child application (conditions, amendments, listed building)",
     "refused": "Refused", "withdrawn": "Withdrawn",
 }
@@ -251,7 +252,7 @@ def gather_city_context(db: Session, council_name: str,
     live_total = sum(status_rollup[s]["beds"] for s in LIVE_STATUSES)
     expected_total = round(sum(status_rollup[s]["expected"] for s in LIVE_STATUSES))
     status_order = list(LIVE_STATUSES) + ["submitted", "dormant", "completed", "superseded",
-                                          "child", "refused", "withdrawn"]
+                                          "ancillary", "child", "refused", "withdrawn"]
     status_table = [
         {"status": s, "label": STATUS_LABELS.get(s, s), "rows": status_rollup[s]["rows"],
          "beds": status_rollup[s]["beds"], "beds_max": status_rollup[s]["beds_max"],

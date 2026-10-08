@@ -438,10 +438,10 @@
   <p>From a crawl sample of {{ "{:,}".format(hmo.sample) }} live student listings,
   {{ "{:,}".format(hmo.hmo_listings) }} priced HMO lets advertise a median
   £{{ hmo.median_ppw }}/week per person (mean £{{ hmo.avg_ppw }}{% if hmo.avg_beds %},
-  average {{ hmo.avg_beds }} beds per house{% endif %}){% if hmo.pbsa_avg_ppw %},
-  against £{{ hmo.pbsa_avg_ppw }}/week average for PBSA listings in the same
-  sample{% endif %}. HMOs are the substitution ceiling on PBSA pricing —
-  the gap is the premium the product has to justify.</p>
+  average {{ hmo.avg_beds }} beds per house{% endif %}){% if rent_headline %},
+  against a £{{ rent_headline.median }}/week median advertised PBSA room tier{% endif %}.
+  HMOs are the substitution ceiling on PBSA pricing — the gap is the premium the
+  product has to justify.</p>
   {% endif %}
 </div>
 {% endif %}

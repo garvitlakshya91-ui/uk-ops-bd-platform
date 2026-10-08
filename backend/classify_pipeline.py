@@ -268,7 +268,13 @@ def main() -> None:
             status, ev = "superseded", f"later consent {a.superseded_by_reference} for the same site"
         else:
             hits = [s for s in live_by_pc.get(site_key(a), []) if implements(a, s)]
-            if cls == "approved" and hits and (a.pbsa_beds or 0) >= MIN_SCHEME_BEDS \
+            on_live_site = bool(live_by_pc.get(site_key(a)))
+            if cls == "approved" and on_live_site and (a.pbsa_beds or 0) < MIN_SCHEME_BEDS:
+                # Alterations, extensions and re-fits of a scheme that is
+                # already operating: not pipeline, not a new consent.
+                s = live_by_pc[site_key(a)][0]
+                status, ev = "ancillary", f"works to the operating scheme {s.name} at the same postcode" + (f" ({a.pbsa_beds} beds)" if a.pbsa_beds else "")
+            elif cls == "approved" and hits and (a.pbsa_beds or 0) >= MIN_SCHEME_BEDS \
                     and not EXTENSION_RE.search(a.description or ""):
                 s = hits[0]
                 status, ev = "completed", f"live scheme {s.name} ({s.beds_total or s.total_units or '?'} beds) at the same postcode"
@@ -298,7 +304,7 @@ def main() -> None:
                 year, ybasis = max(a.decision_date.year + BUILD_YEARS_FULL, today.year + 1), "derived"
             elif status == "under_construction":
                 year, ybasis = today.year + 1, "derived"
-        if status in ("completed", "dormant", "superseded", "child", "refused", "withdrawn", "submitted") and ybasis != "observed":
+        if status in ("completed", "dormant", "superseded", "child", "ancillary", "refused", "withdrawn", "submitted") and ybasis != "observed":
             year, ybasis = None, None
         a.delivery_status, a.delivery_status_basis = status, basis
         a.delivery_status_evidence, a.delivery_status_at = ev, today
