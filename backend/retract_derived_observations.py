@@ -65,7 +65,7 @@ def main() -> None:
                  .filter(ExistingScheme.council_id == council.id,
                          ExistingScheme.scheme_type == "PBSA",
                          SchemeRent.is_current.is_(True),
-                         text("(scheme_rents.source = 'sturents' AND scheme_rents.source_reference LIKE '%/house/%') "
+                         text("scheme_rents.source_reference LIKE '%/house/%' "
                               "OR scheme_rents.rent_per_week < :floor")).params(floor=MIN_RENT_PPW)
                  .all())
     print(f"{args.city}: retracting {n1} derived build years, {n2} consent bed counts on "
