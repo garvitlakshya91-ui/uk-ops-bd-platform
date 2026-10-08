@@ -227,6 +227,19 @@ class PlanningApplication(Base):
     )
     construction_evidence_at: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     construction_source: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # Status-aware pipeline classification (migration 017). A register row
+    # is a child application, an envelope or a live consent — never just
+    # "approved beds".
+    permission_type: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    parent_reference: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    superseded_by_reference: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    delivery_status: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    delivery_status_basis: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    delivery_status_evidence: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    delivery_status_at: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    beds_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    beds_basis: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    delivery_year_basis: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     submission_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     submitted_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     validated_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)

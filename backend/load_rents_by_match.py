@@ -73,7 +73,15 @@ def opdir_rents(rec: dict) -> list[dict]:
     return out
 
 
+MIN_RENT_PPW, MAX_RENT_PPW = 60.0, 700.0   # outside this band it is not a PBSA room rent
+
+
 def sturents_rents(rec: dict) -> list[dict]:
+    # StuRents "house" listings are HMOs on the same street, not scheme
+    # rooms: they must never attach to a PBSA scheme (George Road, 800
+    # Bristol Road and Metchley Lane were mis-attached this way).
+    if not rec.get("is_pbsa_candidate") or "/house/" in (rec.get("url") or ""):
+        return []
     out = []
     for label, wk in [("From (advertised)", rec.get("rent_pppw_min")),
                       ("To (advertised)", rec.get("rent_pppw_max"))]:
@@ -125,7 +133,8 @@ def main() -> None:
                 # the requested city's records may match its schemes.
                 if source == OP and city_lower not in (rec.get("city") or "").lower():
                     continue
-                rents = to_rents(rec)
+                rents = [r for r in to_rents(rec)
+                         if MIN_RENT_PPW <= r["rent_per_week"] <= MAX_RENT_PPW]
                 if not rents:
                     continue
                 scheme, score = best_match(index, rec.get("name") or "",

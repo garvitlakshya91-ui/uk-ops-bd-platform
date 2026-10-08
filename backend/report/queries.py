@@ -24,6 +24,31 @@ APPROVED_RE = re.compile(r"approv|permit|grant|consent", re.I)
 PENDING_RE = re.compile(r"submit|pending|regist|await|valid|consult", re.I)
 REFUSED_RE = re.compile(r"refus|reject|withdraw|dismiss", re.I)
 
+# Status-aware pipeline (classify_pipeline.py). A permitted bed is not a
+# pipeline bed: the weight is the stated delivery assumption applied to
+# each status to turn "maximum permitted" into "risk-weighted expected".
+LIVE_STATUSES = ("under_construction", "pre_letting", "active_consent",
+                 "consented_full", "consented_outline")
+DELIVERY_WEIGHTS = {"under_construction": 1.0, "pre_letting": 1.0,
+                    "active_consent": 0.8, "consented_full": 0.6,
+                    "consented_outline": 0.4}
+STATUS_LABELS = {
+    "under_construction": "Under construction",
+    "pre_letting": "Pre-letting",
+    "active_consent": "Consent active (conditions being discharged)",
+    "consented_full": "Full permission, inside implementation window",
+    "consented_outline": "Outline / hybrid envelope (up to)",
+    "submitted": "Awaiting decision",
+    "dormant": "Dormant consent (no register activity in 3+ years)",
+    "completed": "Completed (in the operational census)",
+    "superseded": "Superseded by a later consent",
+    "child": "Child application (conditions, amendments, listed building)",
+    "refused": "Refused", "withdrawn": "Withdrawn",
+}
+TIER_ROOM_TYPES_EXCLUDED = ("From (advertised)", "To (advertised)", "Range")
+INCENTIVE_CASH_RE = re.compile(r"£\s?([\d,]{2,6})(?!\s*(?:/|per|a)\s*(?:week|wk|pw))", re.I)
+INCENTIVE_WEEKLY_RE = re.compile(r"£\s?(\d{1,3})\s*(?:off\s+)?(?:a|per|/)\s*(?:week|wk)|£\s?(\d{1,3})\s*(?:pw|p/w)\s*off", re.I)
+
 
 def _beds(s: ExistingScheme) -> int:
     return s.beds_total or s.num_units or s.total_units or 0
@@ -183,58 +208,95 @@ def gather_city_context(db: Session, council_name: str,
                     PlanningApplication.scheme_type == "PBSA"))
         .all()
     )
+    this_year = datetime.date.today().year
+    classified = _column_exists(db, "planning_applications", "delivery_status")
+
+    def status_of(a: PlanningApplication) -> str:
+        """Status-aware class when classify_pipeline.py has run; else the
+        decision-based class with the old 'derived' labels."""
+        if classified and a.delivery_status:
+            return a.delivery_status
+        cls = classify_status(a.status, a.decision)
+        if cls == "approved":
+            return "consented_full"
+        if cls == "pending":
+            return "submitted"
+        return cls
+
     pipe_rollup = defaultdict(lambda: {"schemes": 0, "beds": 0})
-    by_delivery = defaultdict(int)
+    status_rollup = defaultdict(lambda: {"rows": 0, "beds": 0, "beds_max": 0, "expected": 0.0,
+                                         "unquantified": 0})
+    by_delivery = defaultdict(lambda: {"beds": 0, "observed": 0, "derived": 0})
     for a in apps:
         cls = classify_status(a.status, a.decision)
+        st = status_of(a)
         beds = a.pbsa_beds or 0
-        pipe_rollup[cls]["schemes"] += 1
-        pipe_rollup[cls]["beds"] += beds
-        if (cls == "approved" and a.expected_delivery_year
-                and a.expected_delivery_year >= datetime.date.today().year):
-            by_delivery[a.expected_delivery_year] += beds
-    top_apps = sorted(
-        (a for a in apps if classify_status(a.status, a.decision) != "refused"),
-        key=lambda a: -(a.pbsa_beds or 0),
-    )[:12]
-
-    this_year = datetime.date.today().year
-
-    def delivery_status(a: PlanningApplication) -> tuple[str, str]:
-        """(label, basis). A stale expected year is intelligence, not a date."""
-        cs = (a.construction_status or "").lower()
-        if cs == "complete":
-            return "complete", "observed"
-        if cs == "under_construction":
-            return "under construction", "observed"
-        if cs == "lapsed":
-            return "consent lapsed", "observed"
-        cls = classify_status(a.status, a.decision)
-        if cls == "pending":
-            return "awaiting decision", "observed"
-        if cls == "approved" and a.expected_delivery_year and a.expected_delivery_year < this_year:
-            return "overdue — no construction observed", "derived"
-        if cls == "approved":
-            return "consented", "observed"
-        return (a.status or a.decision or "unknown").lower(), "observed"
+        # legacy rollup kept for the KPI strip (approved = live consents)
+        legacy = ("approved" if st in LIVE_STATUSES else
+                  "pending" if st == "submitted" else
+                  cls if cls in ("refused",) else "other")
+        pipe_rollup[legacy]["schemes"] += 1
+        pipe_rollup[legacy]["beds"] += beds
+        r = status_rollup[st]
+        r["rows"] += 1
+        r["beds"] += beds
+        r["beds_max"] += a.beds_max or 0
+        r["expected"] += beds * DELIVERY_WEIGHTS.get(st, 0.0)
+        if st in LIVE_STATUSES and not beds:
+            r["unquantified"] += 1
+        if st in LIVE_STATUSES and a.expected_delivery_year and a.expected_delivery_year >= this_year:
+            d = by_delivery[a.expected_delivery_year]
+            d["beds"] += beds
+            d[(a.delivery_year_basis if classified else None) or "derived"] += beds
+    live_total = sum(status_rollup[s]["beds"] for s in LIVE_STATUSES)
+    expected_total = round(sum(status_rollup[s]["expected"] for s in LIVE_STATUSES))
+    status_order = list(LIVE_STATUSES) + ["submitted", "dormant", "completed", "superseded",
+                                          "child", "refused", "withdrawn"]
+    status_table = [
+        {"status": s, "label": STATUS_LABELS.get(s, s), "rows": status_rollup[s]["rows"],
+         "beds": status_rollup[s]["beds"], "beds_max": status_rollup[s]["beds_max"],
+         "weight": DELIVERY_WEIGHTS.get(s), "expected": round(status_rollup[s]["expected"]),
+         "unquantified": status_rollup[s]["unquantified"], "live": s in LIVE_STATUSES}
+        for s in status_order if status_rollup[s]["rows"]
+    ]
+    show = [a for a in apps if status_of(a) in LIVE_STATUSES + ("submitted", "dormant")]
+    top_apps = sorted(show, key=lambda a: (-(a.pbsa_beds or 0), a.reference or ""))[:16]
+    unquantified = [
+        {"reference": a.reference, "address": (a.address or "")[:60], "status": STATUS_LABELS.get(status_of(a), status_of(a)),
+         "evidence": (a.delivery_status_evidence or "")[:90] if classified else ""}
+        for a in apps if status_of(a) in LIVE_STATUSES and not a.pbsa_beds
+    ]
 
     pipeline = {
+        "classified": classified,
         "rollup": dict(pipe_rollup),
-        "by_delivery_year": sorted(by_delivery.items()),
-        "overdue_beds": sum(
-            (a.pbsa_beds or 0) for a in apps
-            if delivery_status(a)[0].startswith("overdue")),
+        "status_table": status_table,
+        "live_total": live_total,
+        "expected_total": expected_total,
+        "weights": DELIVERY_WEIGHTS,
+        "by_delivery_year": sorted(
+            (y, v["beds"], v["observed"], v["derived"]) for y, v in by_delivery.items()),
+        "dormant_beds": status_rollup["dormant"]["beds"],
+        "dormant_rows": status_rollup["dormant"]["rows"],
+        "submitted_beds": status_rollup["submitted"]["beds"],
+        "completed_beds": status_rollup["completed"]["beds"],
+        "unquantified": unquantified,
+        "overdue_beds": 0,
         "top": [
             {
                 "reference": a.reference,
                 "address": (a.address or (a.description or "")[:80]),
-                "status": delivery_status(a)[0],
-                "status_basis": delivery_status(a)[1],
+                "status": STATUS_LABELS.get(status_of(a), status_of(a)),
+                "status_key": status_of(a),
+                "status_basis": (a.delivery_status_basis if classified else None) or "derived",
+                "evidence": ((a.delivery_status_evidence or "") if classified else "")[:110],
                 "beds": a.pbsa_beds,
+                "beds_basis": (a.beds_basis if classified else None) or "stated",
                 "decision_date": a.decision_date.isoformat() if a.decision_date else None,
                 "applicant": a.applicant_name,
                 "delivery_year": a.expected_delivery_year
-                if not delivery_status(a)[0].startswith("overdue") else None,
+                if status_of(a) in LIVE_STATUSES else None,
+                "year_basis": (a.delivery_year_basis if classified else None) or "derived",
             }
             for a in top_apps
         ],
@@ -284,11 +346,13 @@ def gather_city_context(db: Session, council_name: str,
     balance = afford = None
     if demand and demand["adjusted_students"]:
         uni_beds = sum(r["beds"] for r in university_stock)
-        approved = pipeline["rollup"].get("approved", {}).get("beds", 0)
-        pending = pipeline["rollup"].get("pending", {}).get("beds", 0)
+        # Pipeline cases: risk-weighted expected delivery, then every live
+        # consent at its maximum plus what is awaiting decision.
+        approved = pipeline["expected_total"]
+        identified = pipeline["live_total"] + pipeline["submitted_beds"]
         balance = balance_scenarios(
             demand["adjusted_students"], total_beds + uni_beds,
-            approved, approved + pending,
+            approved, identified,
             model_growth=demand.get("cagr"),
         )
         afford = affordability(db, council.id, demand["max_loan"])
@@ -302,6 +366,31 @@ def gather_city_context(db: Session, council_name: str,
             demand["pool"]["coverage"] = round(
                 (total_beds + uni_beds) / demand["pool"]["pool"], 3)
             demand["pool"]["coverage_pct"] = round(100 * demand["pool"]["coverage"], 1)
+
+    # --------------------------------------------- online letting tracker
+    # Latest letting-page state per scheme: a dated availability signal,
+    # never an occupancy rate.
+    letting = None
+    if _table_exists(db, "scheme_availability"):
+        rows = db.execute(text("""
+            WITH latest AS (
+              SELECT DISTINCT ON (scheme_id) scheme_id, state, captured_at
+              FROM scheme_availability ORDER BY scheme_id, captured_at DESC)
+            SELECT es.name, l.state, l.captured_at::date, es.beds_total, es.build_year
+            FROM latest l JOIN existing_schemes es ON es.id = l.scheme_id
+            WHERE es.council_id = :cid AND es.scheme_type = 'PBSA'
+        """), {"cid": council.id}).fetchall()
+        if rows:
+            sold = [r for r in rows if r[1] == "sold_out"]
+            letting = {
+                "checked": len(rows), "sold_out": len(sold),
+                "sold_out_beds": sum((r[3] or 0) for r in sold),
+                "captured": max(r[2] for r in rows).isoformat(),
+                "not_checked": max(len(schemes) - len(rows), 0),
+                "sold_out_list": sorted(
+                    ({"name": r[0], "beds": r[3], "build_year": r[4]} for r in sold),
+                    key=lambda x: -(x["beds"] or 0)),
+            }
 
     # --------------------------------------------------- rents by room type
     rent_segments = [
@@ -319,12 +408,64 @@ def gather_city_context(db: Session, council_name: str,
         """), {"cid": council.id}).fetchall()
     ]
 
-    # ------------------------------------------------------------ finance
-    median_rent = db.execute(text("""
-        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY sr.rent_per_week)
+    # ---------------------------------------------------- rent headline
+    # The headline is the median of advertised room-tier observations, not
+    # of scheme "from" prices: a from-price is each scheme's cheapest tier
+    # and pulls any pooled median down.
+    hl = db.execute(text("""
+        SELECT COUNT(*), COUNT(DISTINCT sr.scheme_id),
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY sr.rent_per_week)
         FROM scheme_rents sr JOIN existing_schemes es ON es.id = sr.scheme_id
-        WHERE es.council_id = :cid AND sr.is_current AND sr.rent_per_week BETWEEN 60 AND 500
-    """), {"cid": council.id}).scalar()
+        WHERE es.council_id = :cid AND sr.is_current AND sr.rent_per_week BETWEEN 60 AND 700
+          AND sr.room_type IS NOT NULL AND sr.room_type <> ALL(:excluded)
+    """), {"cid": council.id, "excluded": list(TIER_ROOM_TYPES_EXCLUDED)}).fetchone()
+    rent_headline = None
+    if hl and hl[0]:
+        rent_headline = {"n": hl[0], "schemes": hl[1], "median": round(float(hl[2]))}
+    median_rent = rent_headline["median"] if rent_headline else None
+
+    # -------------------------------------------- incentives, effective rent
+    # Advertised cash incentives netted off the scheme's tier median: the
+    # first step toward net effective rent (contract length and bills
+    # follow as the series builds).
+    effective_rents = []
+    if _table_exists(db, "scheme_observations"):
+        inc_rows = db.execute(text("""
+            WITH tiers AS (
+              SELECT scheme_id, percentile_cont(0.5) WITHIN GROUP (ORDER BY rent_per_week) AS med,
+                     MAX(contract_length_weeks) AS weeks
+              FROM scheme_rents WHERE is_current AND rent_per_week BETWEEN 60 AND 700
+                AND room_type <> ALL(:excluded) GROUP BY scheme_id),
+            inc AS (
+              SELECT DISTINCT ON (scheme_id, value_text) scheme_id, value_text, observed_at
+              FROM scheme_observations WHERE field = 'incentive' AND value_text IS NOT NULL
+              ORDER BY scheme_id, value_text, observed_at DESC)
+            SELECT es.name, inc.value_text, t.med, t.weeks
+            FROM inc JOIN existing_schemes es ON es.id = inc.scheme_id
+            JOIN tiers t ON t.scheme_id = inc.scheme_id
+            WHERE es.council_id = :cid ORDER BY es.name
+        """), {"cid": council.id, "excluded": list(TIER_ROOM_TYPES_EXCLUDED)}).fetchall()
+        by_scheme: dict[str, dict] = {}
+        for name, txt, med, weeks in inc_rows:
+            cash = sum(int(m.group(1).replace(",", "")) for m in INCENTIVE_CASH_RE.finditer(txt or "")
+                       if re.search(r"cash|voucher|rebate|credit|free", txt or "", re.I))
+            weekly = sum(int(m.group(1) or m.group(2)) for m in INCENTIVE_WEEKLY_RE.finditer(txt or ""))
+            e = by_scheme.setdefault(name, {"scheme": name, "tier_median": round(float(med)),
+                                            "weeks": int(weeks) if weeks else 51, "cash": 0,
+                                            "weekly_off": 0, "incentives": []})
+            # Offers are alternatives, not cumulative: take the largest.
+            e["cash"] = max(e["cash"], cash)
+            e["weekly_off"] = max(e["weekly_off"], weekly)
+            e["incentives"].append(txt)
+        for e in by_scheme.values():
+            if e["cash"] or e["weekly_off"]:
+                e["effective"] = round(e["tier_median"] - e["cash"] / e["weeks"] - e["weekly_off"])
+                e["discount_pct"] = round(100 * (1 - e["effective"] / e["tier_median"]), 1) if e["tier_median"] else None
+                e["incentives"] = "; ".join(e["incentives"])[:120]
+                effective_rents.append(e)
+        effective_rents.sort(key=lambda e: -(e["discount_pct"] or 0))
+
+    # ------------------------------------------------------------ finance
     finance = gather_finance_context(
         db, council.id, float(median_rent) if median_rent else None, total_beds)
 
@@ -378,12 +519,17 @@ def gather_city_context(db: Session, council_name: str,
         "kpis": {
             "pbsa_schemes": len(live),
             "pbsa_beds": total_beds,
+            "beds_opened_2024_plus": sum(r["beds"] for r in live if (r["build_year"] or 0) >= 2024),
             "operators": len([k for k in by_operator if k != "Operator unconfirmed"]),
-            "pipeline_approved_beds": pipeline["rollup"].get("approved", {}).get("beds", 0),
+            "pipeline_approved_beds": pipeline["live_total"],
+            "pipeline_expected_beds": pipeline["expected_total"],
             "pipeline_pending_beds": pipeline["rollup"].get("pending", {}).get("beds", 0),
             "btr_schemes": len(btr),
             "btr_units": sum(_beds(s) or 0 for s in btr),
         },
+        "rent_headline": rent_headline,
+        "effective_rents": effective_rents,
+        "letting": letting,
         "operator_shares": operator_shares,
         "university_stock": university_stock,
         "rent_coverage": len([r for r in census if r["from_rent_ppw"]]),

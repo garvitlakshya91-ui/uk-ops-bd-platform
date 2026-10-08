@@ -42,7 +42,7 @@ def html_to_pdf(html_path: Path, pdf_path: Path) -> None:
                     launch_kwargs["executable_path"] = executable
                 browser = p.chromium.launch(**launch_kwargs)
                 page = browser.new_page()
-                page.goto(html_path.as_uri(), wait_until="networkidle")
+                page.goto(html_path.resolve().as_uri(), wait_until="networkidle")
                 page.pdf(path=str(pdf_path), format="A4", print_background=True)
                 browser.close()
             return

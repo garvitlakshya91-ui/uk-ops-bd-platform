@@ -1,0 +1,98 @@
+{
+  "city": "Birmingham",
+  "note": "Dated, sourced observations of delivery status that the planning register cannot show. Each entry overrides the derived classification for its reference. Statuses: completed, under_construction, pre_letting, active_consent, submitted, dormant, lapsed. 'basis' is observed (we read it on a dated page) or reported (carried from a record we hold but have not checked at source).",
+  "entries": [
+    {
+      "reference": "2018/08221/PA",
+      "scheme": "Crown Place",
+      "status": "completed",
+      "opening_year": 2026,
+      "observed_at": "2026-10-08",
+      "source": "operator_page",
+      "source_url": "https://yugo.com/en-gb/global/united-kingdom/birmingham/crown-place-birmingham",
+      "evidence": "Yugo property page letting 2026-27 (en-suites from £179pw, studios from £189pw, several tiers sold out); AFS lists contracts starting 6 Oct 2026. Consent was 556 bed spaces; S73 variation 2022/07984/PA added further beds, count not stated."
+    },
+    {
+      "reference": "2022/04246/PA",
+      "scheme": "Gough Street",
+      "status": "completed",
+      "opening_year": 2026,
+      "observed_at": "2026-10-08",
+      "source": "operator_page",
+      "source_url": "https://www.vitastudent.com/en/cities/birmingham/gough-street/",
+      "evidence": "Vita Student page: 2026/27 short stays 'low availability, last room remaining'; 2027/28 bookings open; nine room types across 28 floors."
+    },
+    {
+      "reference": "2020/07339/PA",
+      "scheme": "Haus",
+      "status": "completed",
+      "opening_year": null,
+      "observed_at": "2026-10-08",
+      "source": "operator_page",
+      "source_url": "https://yugo.com/en-gb/global/united-kingdom/birmingham/haus",
+      "evidence": "Yugo property page: 'Final rooms remaining', rooms from £185pw for 2026-27. Consent: 266 bedroom student accommodation with 123-room hotel."
+    },
+    {
+      "reference": "2023/05593/PA",
+      "scheme": "St Chads Student Village",
+      "status": "completed",
+      "opening_year": 2026,
+      "observed_at": "2026-10-08",
+      "source": "operator_page",
+      "source_url": "https://www.mezzino.com/property/st-chads-student-village/",
+      "evidence": "Mezzino page: 'Brand new and opened in September 2026'; room pricing 2026/27 £165 to £335; £1,500 cash booking incentive."
+    },
+    {
+      "reference": "2023/08290/PA",
+      "scheme": "The Triangle",
+      "status": "under_construction",
+      "opening_year": 2027,
+      "observed_at": "2026-10-08",
+      "source": "operator_page",
+      "source_url": "https://www.studentroost.co.uk/locations/birmingham/the-triangle",
+      "evidence": "Student Roost page: 'Brand NEW for academic year 27/28, rooms coming soon, join the waiting list'. Register: nine condition-discharge applications Dec 2025 to Aug 2026."
+    },
+    {
+      "reference": "2024/06958/PA",
+      "scheme": "Study Inn Frederick Road",
+      "status": "under_construction",
+      "opening_year": 2027,
+      "observed_at": "2026-10-08",
+      "source": "operator_page",
+      "source_url": "https://studyinn.com/student-accommodation/birmingham/frederick-road/",
+      "evidence": "Study Inn page: 'Opening in September 2027 ... the building is under construction'."
+    },
+    {
+      "reference": "2024/04265/PA",
+      "scheme": "Lancaster Circus (Perryian Works)",
+      "status": "submitted",
+      "opening_year": null,
+      "observed_at": "2026-10-08",
+      "source": "planning_register",
+      "source_url": null,
+      "evidence": "No council decision on the register as at 8 Oct 2026; 1,968 bed spaces proposed. Not an approved scheme."
+    },
+    {
+      "reference": "2019/05598/PA",
+      "scheme": "Pritchatts Road Houses (University of Birmingham)",
+      "status": "completed",
+      "opening_year": null,
+      "observed_at": "2026-10-08",
+      "source": "university_stock",
+      "source_url": null,
+      "evidence": "University-owned stock record: Pritchatts Road Houses, 496 beds, in the University of Birmingham portfolio. Own-source page check pending.",
+      "basis": "reported"
+    },
+    {
+      "reference": "2021/06727/PA",
+      "scheme": "Chamberlain Place",
+      "status": "completed",
+      "opening_year": 2023,
+      "observed_at": "2026-10-08",
+      "source": "market_report",
+      "source_url": null,
+      "evidence": "Chamberlain Buildings conversion (208/209 bedrooms) trades as Chamberlain Place (Prestige Student Living); reported sold Q1 2024. Own-source page check pending; not yet admitted to the census.",
+      "basis": "reported"
+    }
+  ]
+}

@@ -65,8 +65,13 @@
     <div class="kpi"><b>{{ "{:,}".format(kpis.pbsa_beds) }}</b><span>Operational PBSA beds</span></div>
     <div class="kpi"><b>{{ kpis.pbsa_schemes }}</b><span>Operational schemes</span></div>
     <div class="kpi"><b>{{ kpis.operators }}</b><span>Operators identified</span></div>
-    <div class="kpi"><b>{{ "{:,}".format(kpis.pipeline_approved_beds) }}</b><span>Approved pipeline beds</span></div>
+    <div class="kpi"><b>{{ "{:,}".format(kpis.pipeline_expected_beds) }}</b><span>Risk-weighted pipeline beds · derived</span></div>
   </div>
+  <p class="note">{{ "{:,}".format(kpis.beds_opened_2024_plus) }} operational beds opened in 2024 or later.
+  Live consents permit up to {{ "{:,}".format(kpis.pipeline_approved_beds) }} beds; the risk-weighted
+  figure applies the stated delivery weights by planning status (page 3). No market value is
+  stated for the stock: the capitalisation table later in this report is an illustrative
+  sensitivity, not a valuation.</p>
 
   <h2>Operator market share</h2>
   <table>
@@ -102,7 +107,7 @@
   <p class="note">Own-source edition: {{ coverage.schemes_observed }} of
   {{ coverage.schemes_known }} known schemes independently observed by our collection;
   bed counts sourced for {{ coverage.beds_sourced }}, operators for
-  {{ coverage.operator_sourced }}, build years (estimated from consents) for
+  {{ coverage.operator_sourced }}, build years (operator or planning record) for
   {{ coverage.build_year_sourced }}. Blank cells are not yet sourced and totals
   cover sourced beds only.</p>
   {% endif %}
@@ -111,7 +116,7 @@
   <table>
     <tr><th>#</th><th>Scheme</th><th>Operator</th><th>Postcode</th>
         <th class="num">Beds</th><th class="num">Built</th>
-        <th class="num">From £/wk</th><th>Status</th></tr>
+        <th class="num">Entry price £/wk</th><th>Status</th></tr>
     {% for r in census %}
     <tr>
       <td class="num">{{ loop.index }}</td>
@@ -125,8 +130,9 @@
     </tr>
     {% endfor %}
   </table>
-  <p class="note">Advertised from-rents captured {{ generated }} ({{ rent_coverage }} of
-  {{ census | length }} schemes); room-level tiers accumulate with each quarterly capture.</p>
+  <p class="note">Entry price is each scheme's cheapest advertised "from" rent as captured
+  {{ generated }} ({{ rent_coverage }} of {{ census | length }} schemes); it is a scheme
+  attribute, not a market rent. Room-tier observations are reported separately.</p>
 
   {% if university_stock %}
   <h2>University-owned stock</h2>
@@ -149,55 +155,86 @@
 
 <!-- ============================================== page 3: pipeline -->
 <div class="page">
-  <h2>Development pipeline</h2>
-  {% if pipeline.rollup %}
+  <h2>Development pipeline · by planning status</h2>
+  {% if pipeline.status_table %}
   <div class="kpis" style="grid-template-columns: repeat(3, 1fr);">
-    {% for cls in ["approved", "pending", "refused"] %}
-    {% if pipeline.rollup[cls] %}
-    <div class="kpi">
-      <b>{{ "{:,}".format(pipeline.rollup[cls].beds) }}</b>
-      <span>{{ cls }} beds · {{ pipeline.rollup[cls].schemes }} applications</span>
-    </div>
-    {% endif %}
-    {% endfor %}
+    <div class="kpi"><b>{{ "{:,}".format(pipeline.live_total) }}</b>
+      <span>Max permitted · live consents</span></div>
+    <div class="kpi"><b>{{ "{:,}".format(pipeline.expected_total) }}</b>
+      <span>Risk-weighted expected · derived</span></div>
+    <div class="kpi"><b>{{ "{:,}".format(pipeline.submitted_beds) }}</b>
+      <span>Awaiting decision · not in pipeline</span></div>
   </div>
-  {% if pipeline.by_delivery_year %}
-  <h2>Expected delivery (approved schemes)</h2>
   <table>
-    <tr><th>Year</th><th class="num">Beds</th><th style="width:45%"></th></tr>
+    <tr><th>Planning status</th><th class="num">Rows</th><th class="num">Beds (max)</th>
+        <th class="num">Weight</th><th class="num">Expected · derived</th><th class="num">No count</th></tr>
+    {% for s in pipeline.status_table %}
+    <tr{% if not s.live %} style="color: var(--quiet)"{% endif %}>
+      <td>{{ s.label }}</td>
+      <td class="num">{{ s.rows }}</td>
+      <td class="num">{{ "{:,}".format(s.beds) if s.beds else "—" }}</td>
+      <td class="num">{{ ("%.0f%%" | format(100 * s.weight)) if s.weight is not none else "—" }}</td>
+      <td class="num">{{ "{:,}".format(s.expected) if s.live else "—" }}</td>
+      <td class="num">{{ s.unquantified or "" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="note">A permitted bed is not a pipeline bed. Each register row is classified by
+  what it is: child applications (condition discharges, amendments, listed-building consents)
+  are never counted; outline and hybrid permissions carry an "up to" envelope, not a committed
+  count; a full consent with no register activity for three years is dormant, not overdue
+  supply. Weights are stated delivery assumptions, not probabilities we have measured:
+  under construction 100%, consent active 80%, full permission 60%, outline envelope 40%.
+  Completed consents ({{ "{:,}".format(pipeline.completed_beds) }} beds) sit in the operational
+  census, not here.</p>
+
+  {% if pipeline.by_delivery_year %}
+  <h2>Earliest delivery year · live consents</h2>
+  <table>
+    <tr><th>Year</th><th class="num">Beds</th><th class="num">of which dated by evidence</th>
+        <th class="num">earliest possible · derived</th><th style="width:35%"></th></tr>
     {% set dmax = pipeline.by_delivery_year | map(attribute=1) | max %}
-    {% for year, beds in pipeline.by_delivery_year %}
+    {% for year, beds, observed, derived in pipeline.by_delivery_year %}
     <tr>
       <td>{{ year }}</td>
       <td class="num">{{ "{:,}".format(beds) }}</td>
+      <td class="num">{{ "{:,}".format(observed) if observed else "—" }}</td>
+      <td class="num">{{ "{:,}".format(derived) if derived else "—" }}</td>
       <td><div class="bar"><i style="width: {{ (100 * beds / dmax) if dmax else 0 }}%"></i></div></td>
     </tr>
     {% endfor %}
   </table>
-  <p class="note">Delivery years are decision date + typical build time; industry
-  convention applies a 10–20% slippage haircut to approved pipeline.</p>
+  <p class="note">"Dated by evidence" years come from operator or developer statements read
+  on a stated date. "Earliest possible" is decision year plus a typical build, floored at next
+  year: a lower bound, never a forecast. Outline envelopes carry no year until reserved
+  matters are approved.</p>
   {% endif %}
+
   {% if pipeline.top %}
-  <h2>Largest live applications</h2>
-  {% if pipeline.overdue_beds %}
-  <p class="note">{{ "{:,}".format(pipeline.overdue_beds) }} consented beds are past their
-  expected delivery year with no construction evidence observed — treated as stalled
-  until evidence appears, not as supply.</p>
-  {% endif %}
+  <h2>Largest live and pending applications</h2>
   <table>
-    <tr><th>Reference</th><th>Site</th><th>Applicant</th><th>Status</th>
-        <th class="num">Beds</th><th class="num">Est. delivery · derived</th></tr>
+    <tr><th>Reference</th><th>Site</th><th>Status · basis</th>
+        <th class="num">Beds</th><th class="num">Year</th><th>Evidence</th></tr>
     {% for a in pipeline.top %}
-    <tr>
+    <tr{% if a.status_key in ("submitted", "dormant") %} style="color: var(--quiet)"{% endif %}>
       <td>{{ a.reference }}</td>
       <td>{{ a.address }}</td>
-      <td>{{ a.applicant or "—" }}</td>
-      <td class="flag">{{ a.status }}</td>
-      <td class="num">{{ "{:,}".format(a.beds) if a.beds else "—" }}</td>
-      <td class="num">{{ a.delivery_year or "—" }}</td>
+      <td class="flag">{{ a.status }} · {{ a.status_basis }}</td>
+      <td class="num">{{ "{:,}".format(a.beds) if a.beds else "not stated" }}{% if a.beds_basis == "up_to" %} <span class="flag">up to</span>{% endif %}</td>
+      <td class="num">{{ a.delivery_year or "—" }}{% if a.delivery_year %} <span class="flag">{{ a.year_basis }}</span>{% endif %}</td>
+      <td class="flag">{{ a.evidence }}</td>
     </tr>
     {% endfor %}
   </table>
+  {% endif %}
+  {% if pipeline.unquantified %}
+  <p class="note">{{ pipeline.unquantified | length }} live consents state no bed count in the
+  decision text and are carried at zero until the count is read from the application documents:
+  {% for u in pipeline.unquantified %}{{ u.reference }} ({{ u.address }}){% if not loop.last %}; {% endif %}{% endfor %}.</p>
+  {% endif %}
+  {% if pipeline.dormant_beds %}
+  <p class="note">{{ pipeline.dormant_rows }} dormant consents ({{ "{:,}".format(pipeline.dormant_beds) }} beds)
+  have had no register activity for three years or more and are excluded from the pipeline.</p>
   {% endif %}
   {% else %}
   <div class="empty">No PBSA planning applications are loaded for {{ city }} in this
@@ -223,7 +260,7 @@
     {% endif %}
     {% if afford %}
     <div class="kpi"><b>{{ afford.above_pct }}%</b>
-      <span>Rent rows above max loan</span></div>
+      <span>Room-tier rents above the maximum loan</span></div>
     {% endif %}
   </div>
 
@@ -296,8 +333,35 @@
   <p>{{ "{:,}".format(p.beds) }} PBSA beds serve a demand pool of
   {{ "{:,}".format(p.pool) }} — <b>{{ p.coverage }} beds per pool student</b>.
   Nationally {{ "%.1f" | format(100 * p.shares.pbsa_now) }}% of full-time students
-  live in halls. Living-at-home shares are national averages; commuter-heavy cities
-  run higher, so the pool is an upper bound.</p>
+  live in halls. The pool is a model, not an observation: its one modelled input is the
+  living-at-home share, a national average applied to a city that recruits more commuters
+  than average.</p>
+  {% if p.cases %}
+  <table>
+    <tr><th>Demand pool case · derived</th><th class="num">At home or own residence</th>
+        <th class="num">Pool</th><th class="num">Coverage</th></tr>
+    {% for c in p.cases %}
+    <tr><td>{{ c.case }}</td><td class="num">{{ c.home_share_pct }}%</td>
+        <td class="num">{{ "{:,}".format(c.pool) }}</td>
+        <td class="num">{{ "%.1f%%" | format(100 * p.beds / c.pool) if c.pool else "—" }}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="note">Provider-level term-time accommodation (HESA) replaces the national share
+  as soon as it is loaded; until then the band is the honest statement of the pool.</p>
+  {% endif %}
+  {% endif %}
+
+  {% if letting %}
+  <h2>Online letting availability tracker · {{ letting.captured }}</h2>
+  <p>{{ letting.sold_out }} of {{ letting.checked }} scheme letting pages checked showed a
+  sold-out or unavailable state ({{ "{:,}".format(letting.sold_out_beds) }} beds);
+  {{ letting.not_checked }} schemes have no checkable page. This is a dated availability
+  signal, repeated weekly, not an occupancy rate: operators do not publish occupancy, and a
+  page can show sold out for one tier or one contract length.</p>
+  {% if letting.sold_out_list %}
+  <p class="note">Showing sold out:
+  {% for s in letting.sold_out_list %}{{ s.name }}{% if s.beds %} ({{ "{:,}".format(s.beds) }}{% if s.build_year %}, {{ s.build_year }}{% endif %}){% endif %}{% if not loop.last %}; {% endif %}{% endfor %}.</p>
+  {% endif %}
   {% endif %}
 
   {% if balance %}
@@ -318,6 +382,14 @@
   cases are conservative.</p>
   {% endif %}
 
+  {% if rent_headline %}
+  <h2>Advertised rents</h2>
+  <p><b>£{{ rent_headline.median }}/week</b> is the median of {{ rent_headline.n }} advertised
+  room-tier observations across {{ rent_headline.schemes }} schemes, captured {{ generated }}.
+  It is a median of advertised price points, not a bed-weighted market rent: tiers are not yet
+  weighted by the number of rooms of each type, contract lengths differ, and incentives are
+  netted off separately below.</p>
+  {% endif %}
   {% if rent_segments %}
   <h2>Advertised rents by room type · operator pages</h2>
   <table>
@@ -333,12 +405,32 @@
   booking-season series.</p>
   {% endif %}
 
+  {% if effective_rents %}
+  <h2>Advertised cash incentives · net effective rent · derived</h2>
+  <table>
+    <tr><th>Scheme</th><th class="num">Tier median £/wk</th><th>Incentive advertised</th>
+        <th class="num">Cash £</th><th class="num">Effective £/wk</th><th class="num">Discount</th></tr>
+    {% for e in effective_rents %}
+    <tr><td>{{ e.scheme }}</td><td class="num">{{ e.tier_median }}</td>
+        <td class="flag">{{ e.incentives }}</td>
+        <td class="num">{{ "{:,}".format(e.cash) if e.cash else "—" }}{% if e.weekly_off %} (+£{{ e.weekly_off }}/wk){% endif %}</td>
+        <td class="num"><b>{{ e.effective }}</b></td>
+        <td class="num">{{ e.discount_pct }}%</td></tr>
+    {% endfor %}
+  </table>
+  <p class="note">Cash incentives read from operator pages, spread over the advertised
+  contract length (51 weeks where none is stated) and netted off the scheme's tier median.
+  Free weeks, referral offers and "no visa, no pay" guarantees are recorded but not valued.</p>
+  {% endif %}
+
   {% if afford %}
   <h2>Affordability</h2>
-  <p>The maximum maintenance loan outside London ({{ demand.loan_year }}) is
-  £{{ "{:,}".format(afford.max_loan) }} — £{{ afford.weekly_loan }}/week over a
-  51-week tenancy. {{ afford.above_pct }}% of the {{ afford.rows }} advertised rent
-  rows captured this quarter exceed the full loan, before any other living costs.</p>
+  <p>The <b>maximum</b> maintenance loan for a student living away from home outside London
+  ({{ demand.loan_year }}) is £{{ "{:,}".format(afford.max_loan) }} — £{{ afford.weekly_loan }}/week
+  over a 51-week tenancy. {{ afford.above_pct }}% of the {{ afford.rows }} advertised room-tier
+  observations exceed it before any other living cost. Most students receive less than the
+  maximum: entitlement falls with household income, so the share of rooms out of reach is
+  higher for the median household than this figure shows.</p>
   {% endif %}
 
   {% if hmo %}
@@ -397,8 +489,8 @@
 
   {% if finance.sensitivity %}
   {% set sv = finance.sensitivity %}
-  <h2>Valuation sensitivity · forecast from our rent captures</h2>
-  <p>Median advertised rent of £{{ "%.0f" | format(sv.median_rent_ppw) }}/week over
+  <h2>Illustrative capitalisation sensitivity · derived, not a valuation</h2>
+  <p>The median advertised room-tier rent of £{{ "%.0f" | format(sv.median_rent_ppw) }}/week over
   {{ sv.assumptions.tenancy_weeks }} weeks at {{ "%.0f" | format(100 * sv.assumptions.occupancy) }}%
   occupancy gives £{{ "{:,}".format(sv.gross_per_bed) }} gross and
   £{{ "{:,}".format(sv.noi_per_bed) }} net per bed a year (operating costs assumed at
@@ -412,9 +504,11 @@
         <td class="num">£{{ "{:,}".format(g.market_value_m) }}m</td></tr>
     {% endfor %}
   </table>
-  <p class="note">A sensitivity, not a valuation: rents are advertised entry prices across the
-  schemes we capture; occupancy and cost ratios are stated assumptions to be replaced by
-  scheme-level evidence as the series builds.</p>
+  <p class="note">One rent, one occupancy, one cost ratio and one yield applied to every bed:
+  it shows how far each input moves a per-bed value, nothing more. It ignores room mix,
+  nominations, age, specification, leasehold structure and actual NOI, so it is not an
+  estimate of what the stock would sell for. Transaction evidence replaces it as it is
+  recorded.</p>
   {% endif %}
 </div>
 {% endif %}
@@ -461,10 +555,13 @@
   <h2 style="margin-top: 8mm;">Methodology &amp; sources</h2>
   <p class="note"><b>Observed</b> figures are read directly from a source on a stated date
   (census, rents, booking states, planning decisions, enrolments). <b>Derived</b> figures
-  are computed from observed ones by a stated rule (expected delivery year, demand pool,
-  overdue status, coverage of rental demand). <b>Forecast</b> figures project forward under
-  stated assumptions (provision-rate scenarios, valuation sensitivity). Column headers and
-  section titles carry the tag wherever a figure is not observed.</p>
+  are computed from observed ones by a stated rule (earliest delivery year, demand pool,
+  pipeline status and weights, net effective rent, coverage of rental demand).
+  <b>Forecast</b> figures project forward under stated assumptions (provision-rate
+  scenarios, capitalisation sensitivity). Column headers and section titles carry the tag
+  wherever a figure is not observed. Pipeline rows are classified from the register itself
+  (application type, parent references, decision dates, condition discharges) plus dated
+  operator statements; a consent is "completed" only when a live scheme stands on its site.</p>
   <p class="note">
     Scheme census assembled from operator directories, listings platforms, planning
     records and licensed market research, verified against multiple sources per
@@ -476,9 +573,9 @@
   <table>
     <tr><th>Census field</th><th class="num">Sourced</th><th class="num">Known schemes</th></tr>
     <tr><td>Scheme observed by our collection</td><td class="num">{{ coverage.schemes_observed }}</td><td class="num">{{ coverage.schemes_known }}</td></tr>
-    <tr><td>Bed count (operator page or planning consent)</td><td class="num">{{ coverage.beds_sourced }}</td><td class="num">{{ coverage.schemes_known }}</td></tr>
+    <tr><td>Bed count (operator page, or the consent the scheme was built under)</td><td class="num">{{ coverage.beds_sourced }}</td><td class="num">{{ coverage.schemes_known }}</td></tr>
     <tr><td>Operator (named in our listings)</td><td class="num">{{ coverage.operator_sourced }}</td><td class="num">{{ coverage.schemes_known }}</td></tr>
-    <tr><td>Build year (estimated from consent)</td><td class="num">{{ coverage.build_year_sourced }}</td><td class="num">{{ coverage.schemes_known }}</td></tr>
+    <tr><td>Build year (operator or planning record)</td><td class="num">{{ coverage.build_year_sourced }}</td><td class="num">{{ coverage.schemes_known }}</td></tr>
     <tr><td>University properties observed</td><td class="num">{{ coverage.universities_observed }}</td><td class="num">{{ coverage.universities_known }}</td></tr>
   </table>
   {% else %}

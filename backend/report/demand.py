@@ -153,12 +153,23 @@ def gather_demand_context(db: Session, council_id: int) -> dict | None:
     pool = None
     if shares:
         in_city = adjusted_students - absent
+        home = shares["parental"] + shares["own_residence"]
         pool = {
             "in_city": round(in_city),
             "absent": round(absent),
             "absent_year": absent_year,
             "shares": shares,
-            "pool": round(in_city * (1 - shares["parental"] - shares["own_residence"])),
+            "pool": round(in_city * (1 - home)),
+            # The living-at-home share is the one modelled input. Until
+            # provider-level term-time accommodation data is loaded, show
+            # the pool as a band around the national share, not a point.
+            "cases": [
+                {"case": label, "home_share_pct": round(100 * min(max(home + d, 0.0), 0.95), 1),
+                 "pool": round(in_city * (1 - min(max(home + d, 0.0), 0.95)))}
+                for label, d in (("Low-commuter case (10pp fewer at home)", -0.10),
+                                 ("Central (UK full-time shares)", 0.0),
+                                 ("Commuter case (10pp more at home)", 0.10))
+            ],
         }
 
     loan = (
@@ -204,8 +215,8 @@ def balance_scenarios(students: float, beds_now: int,
     bear/bull band, falling back to 0/1/2% when history is too short.
     """
     cases = [("Current stock only", beds_now),
-             ("Plus approved pipeline", beds_now + approved_beds),
-             ("Plus all identified pipeline", beds_now + identified_beds)]
+             ("Plus risk-weighted pipeline", beds_now + approved_beds),
+             ("Plus all live consents and applications (max)", beds_now + identified_beds)]
     if model_growth is not None:
         scenarios = [
             (f"Bear ({model_growth - SCENARIO_BAND:+.1%})",
@@ -239,12 +250,16 @@ def balance_scenarios(students: float, beds_now: int,
 def affordability(db: Session, council_id: int, max_loan: int | None) -> dict | None:
     if not max_loan:
         return None
+    # Room-tier observations only: a scheme's "from" price is its cheapest
+    # tier and would understate the share of rooms above the loan.
     rows = db.execute(text("""
         SELECT sr.rent_per_week, COALESCE(sr.contract_length_weeks, :wk) AS weeks
         FROM scheme_rents sr
         JOIN existing_schemes es ON es.id = sr.scheme_id
         WHERE es.council_id = :cid AND sr.is_current
-          AND sr.rent_per_week IS NOT NULL
+          AND sr.rent_per_week BETWEEN 60 AND 700
+          AND sr.room_type IS NOT NULL
+          AND sr.room_type NOT IN ('From (advertised)', 'To (advertised)', 'Range')
     """), {"cid": council_id, "wk": ASSUMED_TENANCY_WEEKS}).fetchall()
     if not rows:
         return None
