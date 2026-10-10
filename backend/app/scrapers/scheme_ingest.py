@@ -1278,10 +1278,35 @@ def ingest_rsh_judgements(
 # EPC -> ExistingScheme (enrichment)  [UNCHANGED]
 # ---------------------------------------------------------------------------
 
+# A=100, B=85, C=70, D=55, E=40, F=25, G=10
+_EPC_BAND_SCORES = {"A": 100, "B": 85, "C": 70, "D": 55, "E": 40, "F": 25, "G": 10}
+
+
+def epc_performance_score(ratings: dict[str, int] | None) -> float | None:
+    """
+    Derive a 0-100 performance score from EPC band counts ({"A": 3, "B": 10}):
+    the mean band score weighted by the number of certificates in each band.
+    Returns None when there are no rated certificates.
+    """
+    if not ratings:
+        return None
+    total_certs = sum(ratings.values())
+    if total_certs <= 0:
+        return None
+    weighted = sum(
+        _EPC_BAND_SCORES.get(rating, 50) * count
+        for rating, count in ratings.items()
+    )
+    return round(weighted / total_certs, 1)
+
+
 async def enrich_schemes_with_epc(db: Session) -> dict[str, int]:
     """
     For each scheme with a postcode, fetch EPC rating distribution
     and update the scheme's epc_ratings and performance_rating fields.
+
+    A scheme counts as enriched only when the register returned rated
+    certificates for its postcode.
     """
     from app.scrapers.epc_scraper import EPCScraper
 
@@ -1310,16 +1335,10 @@ async def enrich_schemes_with_epc(db: Session) -> dict[str, int]:
                         scheme.epc_ratings = distribution
 
                         # Derive performance score from EPC ratings
-                        # A=100, B=85, C=70, D=55, E=40, F=25, G=10
-                        score_map = {"A": 100, "B": 85, "C": 70, "D": 55, "E": 40, "F": 25, "G": 10}
-                        total_certs = sum(distribution.values())
-                        if total_certs > 0:
-                            weighted = sum(
-                                score_map.get(rating, 50) * count
-                                for rating, count in distribution.items()
-                            )
-                            scheme.performance_rating = round(weighted / total_certs, 1)
-                        enriched += 1
+                        score = epc_performance_score(distribution.get("ratings"))
+                        if score is not None:
+                            scheme.performance_rating = score
+                            enriched += 1
                 except Exception as exc:
                     logger.warning(
                         "epc_enrichment_failed",
