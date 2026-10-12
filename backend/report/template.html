@@ -571,6 +571,97 @@
   schemes ({{ "{:,}".format(kpis.btr_units) }} units) in {{ city }}.</p>
   {% endif %}
 
+  {% if evidence %}
+  <h2 style="margin-top: 8mm;">Evidence annex</h2>
+  <p class="note">Every census bed count with the source it was read from and when.
+  <b>Verified</b>: an analyst or two independent sources confirm the scheme and its count.
+  <b>Probable</b>: a single source, nothing contradicts it. <b>Unresolved</b>: no publishable count,
+  sources disagree, or an open registry question. Headline totals rest on verified and probable beds;
+  unresolved beds are shown so the reader can judge the exposure.</p>
+  <table>
+    <tr><th>Standing</th><th class="num">Schemes</th><th class="num">Beds</th><th class="num">Share</th></tr>
+    {% for tier in ("verified", "probable", "unresolved") %}
+    <tr><td>{{ tier }}</td><td class="num">{{ evidence.totals[tier].schemes }}</td>
+        <td class="num">{{ "{:,}".format(evidence.totals[tier].beds) }}</td>
+        <td class="num">{{ evidence.totals[tier].share }}%</td></tr>
+    {% endfor %}
+    <tr><td><b>All</b></td><td class="num"><b>{{ evidence.rows | length }}</b></td>
+        <td class="num"><b>{{ "{:,}".format(evidence.total_beds) }}</b></td><td class="num">100%</td></tr>
+  </table>
+
+  {% for p in evidence.packs %}
+  <h3>Reconciliation · {{ p.label }}</h3>
+  <p class="note">{{ p.matched }} of the pack's {{ p.pack_schemes }} private schemes matched to the census
+  ({{ p.agreeing }} agree on beds within 5%); {{ p.missing_from_ours | length }} in the pack are not in our census,
+  {{ p.ours_not_in_pack | length }} of ours are not in the pack. Our total
+  {{ "{:,}".format(p.our_total) }} beds is
+  {% if p.total_delta_pct is not none %}{{ "%+.1f" | format(p.total_delta_pct) }}% against the pack's total{% else %}not comparable{% endif %}
+  {% if not evidence.publication and p.pack_beds %}({{ "{:,}".format(p.pack_beds) }} beds){% endif %}.
+  {% if evidence.publication %}Benchmark figures are licensed and shown only as relative deltas.{% endif %}</p>
+  {% if p.mismatches %}
+  <table>
+    <tr><th>Scheme</th><th>Pack name</th><th class="num">Ours</th>{% if not evidence.publication %}<th class="num">Pack</th>{% endif %}<th class="num">Delta</th></tr>
+    {% for m in p.mismatches %}
+    <tr><td>{{ m.name }}</td><td>{{ m.property }}</td><td class="num">{{ m.ours or "—" }}</td>
+        {% if not evidence.publication %}<td class="num">{{ m.theirs or "—" }}</td>{% endif %}
+        <td class="num">{{ "%+.0f" | format(m.delta_pct) }}%</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% if p.missing_from_ours %}
+  <p class="note">In the pack, not in our census: {% for m in p.missing_from_ours %}{{ m.property }} ({{ m.postcode or "—" }}){% if not loop.last %}; {% endif %}{% endfor %}.</p>
+  {% endif %}
+  {% if p.ours_not_in_pack %}
+  <p class="note">In our census, not in the pack: {% for m in p.ours_not_in_pack %}{{ m.name }} ({{ m.beds or "—" }}){% if not loop.last %}; {% endif %}{% endfor %}.</p>
+  {% endif %}
+  {% endfor %}
+
+  <h3>Scheme evidence</h3>
+  <table>
+    <tr><th>#</th><th>Scheme</th><th class="num">Beds</th><th>Source</th><th>Date</th><th>Standing</th><th>Open questions</th></tr>
+    {% for r in evidence.rows %}
+    <tr>
+      <td class="num">{{ r.id }}</td>
+      <td>{{ r.name }}</td>
+      <td class="num">{{ "{:,}".format(r.beds) if r.beds else "—" }}</td>
+      <td class="flag">{{ r.beds_source }}{% if r.beds_confidence %} · {{ "%.0f" | format(100 * r.beds_confidence) }}%{% endif %}</td>
+      <td class="flag">{{ r.beds_date or "—" }}</td>
+      <td class="flag">{{ r.tier }}{% if r.verification == "verified" %} ({{ r.verified_by }}){% endif %}</td>
+      <td class="flag">{{ r.issues | join("; ") if r.issues else "" }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  {% if evidence.shared_postcodes %}
+  <p class="note">Shared postcodes in the census:
+  {% for g in evidence.shared_postcodes %}{{ g.postcode }} ({{ g.schemes | join(" / ") }}{% if g.confirmed %}, confirmed distinct{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}.</p>
+  {% endif %}
+  {% if evidence.pipeline_contradictions %}
+  <h3>Pipeline bed counts the description does not state</h3>
+  <table>
+    <tr><th>Reference</th><th>Site</th><th class="num">Stored</th><th>Basis</th><th class="num">Text says</th><th>Phrase</th></tr>
+    {% for c in evidence.pipeline_contradictions %}
+    <tr><td>{{ c.reference }}</td><td>{{ c.address }}</td><td class="num">{{ c.stored }}</td>
+        <td class="flag">{{ c.basis or "—" }}</td><td class="num">{{ c.extracted or "—" }}</td><td class="flag">{{ c.quote }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  <h3>Publish gates</h3>
+  {% if gate_failures %}
+  <p class="note">{{ gate_failures | length }} gate(s) failed. {% if publication %}This is a draft built with the gates ignored.{% else %}A publication build would refuse until these are cleared.{% endif %}</p>
+  <table>
+    <tr><th>Gate</th><th>Finding</th></tr>
+    {% for f in gate_failures %}
+    <tr><td class="flag">{{ f.gate }}</td><td>{{ f.message }}{% if f.detail %}<br><span class="flag">{{ f.detail[:6] | join(" · ") }}{% if f.detail | length > 6 %} · and {{ f.detail | length - 6 }} more{% endif %}</span>{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="note">All publish gates passed: census total within 5% of each benchmark pack, no unconfirmed
+  shared postcodes, every pipeline bed count supported by its description, no stale statuses.</p>
+  {% endif %}
+  {% endif %}
+
   <h2 style="margin-top: 8mm;">Methodology &amp; sources</h2>
   <p class="note"><b>Observed</b> figures are read directly from a source on a stated date
   (census, rents, booking states, planning decisions, enrolments). <b>Derived</b> figures

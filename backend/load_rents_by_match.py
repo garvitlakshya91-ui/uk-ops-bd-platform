@@ -27,8 +27,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from sqlalchemy import text
 
 from app.database import SessionLocal
-from app.models.models import Council, ExistingScheme, SchemeRent
-from app.models.rent_history import supersede_rents
+from app.models.models import Council, ExistingScheme, SchemeAdvertisedRent
+from app.models.rents import record_advertised_rent, supersede
 from app.scrapers.scheme_matching import best_match, build_index
 
 AFS = "afs_directory"
@@ -50,7 +50,7 @@ def afs_rents(rec: dict) -> list[dict]:
     if not wk:
         return []
     return [{
-        "room_type": "From (advertised)",
+        "kind": "from",
         "rent_per_week": float(wk),
         "source": AFS,
         "source_reference": rec.get("url"),
@@ -59,11 +59,10 @@ def afs_rents(rec: dict) -> list[dict]:
 
 def opdir_rents(rec: dict) -> list[dict]:
     out = []
-    for label, wk in [("From (advertised)", rec.get("rent_ppw_min")),
-                      ("To (advertised)", rec.get("rent_ppw_max"))]:
+    for kind, wk in [("from", rec.get("rent_ppw_min")), ("to", rec.get("rent_ppw_max"))]:
         if wk:
             out.append({
-                "room_type": label,
+                "kind": kind,
                 "rent_per_week": float(wk),
                 "source": OP,
                 "source_reference": rec.get("url"),
@@ -83,11 +82,10 @@ def sturents_rents(rec: dict) -> list[dict]:
     if not rec.get("is_pbsa_candidate") or "/house/" in (rec.get("url") or ""):
         return []
     out = []
-    for label, wk in [("From (advertised)", rec.get("rent_pppw_min")),
-                      ("To (advertised)", rec.get("rent_pppw_max"))]:
+    for kind, wk in [("from", rec.get("rent_pppw_min")), ("to", rec.get("rent_pppw_max"))]:
         if wk:
             out.append({
-                "room_type": label,
+                "kind": kind,
                 "rent_per_week": float(wk),
                 "contract_length_weeks": rec.get("lease_weeks"),
                 "source": ST,
@@ -151,16 +149,21 @@ def main() -> None:
               + (f"; {unmatched} records unmatched" if source == ST else ""))
         if args.dry_run or not rows:
             continue
-        superseded = supersede_rents(
-            db.connection(), [source], scheme_ids=sids)
+        # Each capture is a permanent point in the series: prior rows for
+        # these schemes are superseded, today's are appended.
+        superseded = supersede(db, SchemeAdvertisedRent, [source], scheme_ids=sids)
         for sid, r in rows:
-            db.add(SchemeRent(scheme_id=sid, currency="GBP", **r))
+            record_advertised_rent(
+                db, scheme_id=sid, source=source, kind=r["kind"], rent_ppw=r["rent_per_week"],
+                contract_length_weeks=r.get("contract_length_weeks"),
+                source_reference=r.get("source_reference"),
+            )
         print(f"  superseded {superseded} prior rows, inserted {len(rows)}")
 
     if not args.dry_run:
         db.commit()
         total = db.execute(text(
-            "SELECT COUNT(DISTINCT sr.scheme_id) FROM scheme_rents sr "
+            "SELECT COUNT(DISTINCT sr.scheme_id) FROM scheme_advertised_rents sr "
             "JOIN existing_schemes es ON es.id = sr.scheme_id "
             "WHERE es.council_id = :cid AND sr.is_current"
         ), {"cid": council.id}).scalar()

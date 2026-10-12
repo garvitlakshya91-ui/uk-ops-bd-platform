@@ -9,8 +9,9 @@ and extract advertised prices via three strategies:
   3. Text regex: £X per week / pw / pppw and £X pcm / per month
 
 Weekly prices kept in a plausible band (£60–£550); monthly £300–£4,000.
-Writes min/max as 'From'/'To' rows, source='page_price_extract'.
-Idempotent per source label. Polite: 1.2s between requests.
+Writes min/max as 'from'/'to' rows in ``scheme_advertised_rents``,
+source='page_price_extract'. Idempotent per source label. Polite: 1.2s
+between requests.
 
 Usage:
     python extract_page_rents.py [--limit N] [--dry-run]
@@ -28,11 +29,12 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(__file__))
 
 import httpx
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
-DB_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/uk_ops_bd"
-)
+from app.database import SessionLocal
+from app.models.models import SchemeAdvertisedRent
+from app.models.rents import record_advertised_rent, supersede
+
 SOURCE = "page_price_extract"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
@@ -107,18 +109,23 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    engine = create_engine(DB_URL)
-    with engine.connect() as c:
-        rows = c.execute(text("""
+    db = SessionLocal()
+    try:
+        # Rent-less = no room tier and no advertised price on record; area
+        # benchmarks live per council, not per scheme, so they never count.
+        rows = db.execute(text("""
             SELECT es.id, es.name, es.source_reference
             FROM existing_schemes es
             WHERE es.scheme_type IN ('BTR','PBSA','Co-living','Senior')
               AND es.source_reference LIKE 'http%'
-              AND NOT EXISTS (SELECT 1 FROM scheme_rents sr
-                              WHERE sr.scheme_id = es.id
-                                AND sr.source NOT IN ('ons_pipr_area'))
+              AND NOT EXISTS (SELECT 1 FROM scheme_room_rents rr
+                              WHERE rr.scheme_id = es.id)
+              AND NOT EXISTS (SELECT 1 FROM scheme_advertised_rents ar
+                              WHERE ar.scheme_id = es.id)
             ORDER BY es.id
         """)).fetchall()
+    finally:
+        db.close()
     if args.limit:
         rows = rows[: args.limit]
     print(f"{len(rows):,} rent-less schemes with property URLs")
@@ -146,15 +153,15 @@ def main():
         stats["schemes_with_prices"] += 1
         pairs = []
         if weekly:
-            pairs.append(("From", weekly[0], round(weekly[0] * 52 / 12, 2)))
+            pairs.append(("from", weekly[0], round(weekly[0] * 52 / 12, 2)))
             if len(weekly) > 1:
-                pairs.append(("To", weekly[-1], round(weekly[-1] * 52 / 12, 2)))
+                pairs.append(("to", weekly[-1], round(weekly[-1] * 52 / 12, 2)))
         elif monthly:
-            pairs.append(("From", round(monthly[0] * 12 / 52, 2), monthly[0]))
+            pairs.append(("from", round(monthly[0] * 12 / 52, 2), monthly[0]))
             if len(monthly) > 1:
-                pairs.append(("To", round(monthly[-1] * 12 / 52, 2), monthly[-1]))
-        for rt, ppw, pcm in pairs:
-            payload.append({"sid": sid, "rt": rt, "ppw": ppw, "pcm": pcm,
+                pairs.append(("to", round(monthly[-1] * 12 / 52, 2), monthly[-1]))
+        for kind, ppw, pcm in pairs:
+            payload.append({"sid": sid, "kind": kind, "ppw": ppw, "pcm": pcm,
                             "ref": url[:500]})
         if i % 50 == 0:
             print(f"  {i}/{len(rows)} fetched, "
@@ -167,19 +174,17 @@ def main():
     if args.dry_run or not payload:
         return
 
-    with engine.begin() as c:
+    db = SessionLocal()
+    try:
         # Append-only: supersede only the re-scraped schemes' rows.
-        c.execute(text("""
-            UPDATE scheme_rents SET is_current = FALSE, superseded_at = NOW()
-            WHERE is_current AND source = :s AND scheme_id = ANY(:ids)
-        """), {"s": SOURCE, "ids": list({p["sid"] for p in payload})})
+        supersede(db, SchemeAdvertisedRent, [SOURCE], {p["sid"] for p in payload})
         for p in payload:
-            c.execute(text("""
-                INSERT INTO scheme_rents
-                    (scheme_id, room_type, rent_per_week, rent_per_month,
-                     currency, source, source_reference, scraped_at, created_at)
-                VALUES (:sid, :rt, :ppw, :pcm, 'GBP', :src, :ref, NOW(), NOW())
-            """), {**p, "src": SOURCE})
+            record_advertised_rent(db, scheme_id=p["sid"], source=SOURCE,
+                                   kind=p["kind"], rent_ppw=p["ppw"],
+                                   rent_pcm=p["pcm"], source_reference=p["ref"])
+        db.commit()
+    finally:
+        db.close()
     print(f"saved {len(payload):,} rent rows")
 
 

@@ -11,7 +11,10 @@ API endpoint:
 Supported parameters (verified against live API):
     updatedFrom   — ISO 8601 datetime, e.g. "2025-01-01T00:00:00Z"
     updatedTo     — ISO 8601 datetime
-    stages        — "award", "tender", "planning", "contract" (comma-separated)
+    stages        — exactly ONE of "planning", "tender", "award". Anything else
+                    (including "contract") is a 400; a comma-separated list
+                    returns no releases and a repeated param keeps only the
+                    last value (re-verified against the live API 2026-10-11)
     limit         — results per page (max 100)
     cursor        — opaque pagination token from links.next
 
@@ -44,8 +47,9 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, AsyncIterator
 from urllib.parse import urlencode
 
 import structlog
@@ -139,17 +143,24 @@ _HOUSING_KEYWORDS = [
     "council housing",
 ]
 
-# Stages to fetch — award has supplier info; valid values: planning, tender, award, contract
-# "contract" stage releases carry the post-signature actual end dates and any
-# extensions / option exercises, which is the most accurate source for
-# contract_end_date on existing schemes.
-_STAGES = ["award", "tender", "contract"]
+# Stage to fetch. The API takes a single value from planning / tender / award
+# ("contract" is rejected with a 400). "award" is where the supplier/operator
+# lives, and its releases are tagged ["award", "contract"] and carry the
+# contracts[] array that _parse_release reads for signed contract dates.
+_STAGE = "award"
 
 # Max results per API page
 _PAGE_SIZE = 100
 
 # Max pages per run (safety cap — ~100*500 = 50,000 records max)
 _MAX_PAGES = 500
+
+# Default look-back for a run. The daily schedule only needs the last
+# 30 days; pass published_from for a one-off back-fill.
+DEFAULT_DAYS_BACK = 30
+
+# Pages gathered before a batch is handed to the caller to persist.
+DEFAULT_BATCH_PAGES = 5
 
 
 class FindATenderScraper(BaseScraper):
@@ -172,6 +183,8 @@ class FindATenderScraper(BaseScraper):
             rate_limit=rate_limit,
             proxy_url=proxy_url,
         )
+        # Set when a run stops before the API ran out of pages.
+        self.truncated: bool = False
 
     # ------------------------------------------------------------------
     # Search
@@ -190,11 +203,87 @@ class FindATenderScraper(BaseScraper):
         """
         Fetch housing-related contract notices from the FAT OCDS JSON API.
 
-        Paginates through award/contract releases within the date window and
-        filters client-side for our CPV codes and housing keywords.
+        Paginates through award/contract releases within the date window
+        (the last ``DEFAULT_DAYS_BACK`` days unless ``published_from`` is
+        given) and filters client-side for our CPV codes and housing
+        keywords. Everything is held in memory until the end; a task that
+        must keep partial results should use :meth:`iter_batches`.
+        """
+        all_results: list[dict[str, Any]] = []
+        async for page_results in self._iter_housing_pages(
+            cpv_codes=cpv_codes,
+            published_from=published_from,
+            published_to=published_to,
+            max_pages=max_pages,
+        ):
+            all_results.extend(page_results)
+
+        self.metrics.applications_found = len(all_results)
+        return all_results
+
+    async def iter_batches(
+        self,
+        *,
+        batch_pages: int = DEFAULT_BATCH_PAGES,
+        time_budget_seconds: float | None = None,
+        **search_kwargs: Any,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """
+        Yield parsed contract records every ``batch_pages`` pages so the
+        caller can persist each batch before the next is fetched. A run
+        that is cut short keeps everything yielded so far.
+
+        Args:
+            batch_pages: Pages to gather per batch.
+            time_budget_seconds: Stop fetching once this much time has
+                passed; ``self.truncated`` is then set.
+            **search_kwargs: ``published_from``, ``published_to``,
+                ``cpv_codes`` and ``max_pages`` as for
+                :meth:`search_applications`.
+
+        Yields:
+            Lists of contract dicts ready for ``ingest_tender_contracts``.
+        """
+        deadline = (
+            time.monotonic() + time_budget_seconds
+            if time_budget_seconds is not None
+            else None
+        )
+        batch: list[dict[str, Any]] = []
+        pages_in_batch = 0
+
+        async for page_results in self._iter_housing_pages(
+            deadline=deadline, **search_kwargs
+        ):
+            for raw in page_results:
+                batch.append(await self.parse_application(raw))
+                self.metrics.applications_found += 1
+            pages_in_batch += 1
+            if pages_in_batch >= batch_pages:
+                yield batch
+                batch = []
+                pages_in_batch = 0
+
+        if batch:
+            yield batch
+
+    async def _iter_housing_pages(
+        self,
+        *,
+        cpv_codes: list[str] | None = None,
+        published_from: date | None = None,
+        published_to: date | None = None,
+        max_pages: int = _MAX_PAGES,
+        deadline: float | None = None,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """Walk the OCDS pages, yielding the housing matches from each one.
+
+        A page with no matches yields an empty list so callers can count
+        pages. Sets ``self.truncated`` when the walk stops early (page cap,
+        deadline or repeated errors) rather than at the last page.
         """
         if published_from is None:
-            published_from = date.today() - timedelta(days=1825)  # 5 years
+            published_from = date.today() - timedelta(days=DEFAULT_DAYS_BACK)
         if published_to is None:
             published_to = date.today()
 
@@ -203,23 +292,32 @@ class FindATenderScraper(BaseScraper):
         updated_from_str = f"{published_from.isoformat()}T00:00:00Z"
         updated_to_str = f"{published_to.isoformat()}T23:59:59Z"
 
-        all_results: list[dict[str, Any]] = []
+        self.truncated = False
         seen_ocids: set[str] = set()
         pages = 0
         total_checked = 0
+        total_matched = 0
 
         # Start with the initial URL
-        # httpx serialises list values as repeated params: stages=award&stages=contract
         params: dict[str, Any] = {
             "updatedFrom": updated_from_str,
             "updatedTo": updated_to_str,
-            "stages": _STAGES,
+            "stages": _STAGE,
             "limit": _PAGE_SIZE,
         }
         next_url: str | None = OCDS_API_URL
 
         consecutive_errors = 0
-        while next_url and pages < max_pages:
+        while next_url:
+            if pages >= max_pages:
+                self.truncated = True
+                self.log.warning("fat_ocds_page_cap_reached", pages=pages)
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                self.truncated = True
+                self.log.warning("fat_ocds_time_budget_reached", pages=pages)
+                break
+
             try:
                 if pages == 0:
                     resp = await self.fetch(next_url, params=params, use_cache=False)
@@ -234,7 +332,8 @@ class FindATenderScraper(BaseScraper):
                     consecutive_errors=consecutive_errors,
                 )
                 if consecutive_errors >= 3:
-                    self.log.warning("fat_ocds_stopping_after_errors", matched=len(all_results))
+                    self.truncated = True
+                    self.log.warning("fat_ocds_stopping_after_errors", matched=total_matched)
                     break
                 # Wait and retry with same URL
                 await asyncio.sleep(30)
@@ -245,6 +344,7 @@ class FindATenderScraper(BaseScraper):
             try:
                 data = resp.json()
             except Exception:
+                self.truncated = True
                 self.log.warning("fat_ocds_json_error", page=pages)
                 break
 
@@ -254,6 +354,7 @@ class FindATenderScraper(BaseScraper):
 
             total_checked += len(releases)
 
+            page_results: list[dict[str, Any]] = []
             for release in releases:
                 ocid = release.get("ocid", "")
                 if not ocid or ocid in seen_ocids:
@@ -263,26 +364,27 @@ class FindATenderScraper(BaseScraper):
                 if _is_housing_release(release, housing_cpvs):
                     parsed = _parse_release(release)
                     if parsed:
-                        all_results.append(parsed)
+                        page_results.append(parsed)
 
             pages += 1
+            total_matched += len(page_results)
             next_url = (data.get("links") or {}).get("next")
 
             self.log.info(
                 "fat_ocds_page",
                 page=pages,
                 checked=total_checked,
-                matched=len(all_results),
+                matched=total_matched,
             )
+            yield page_results
 
-        self.metrics.applications_found = len(all_results)
         self.log.info(
             "fat_search_complete",
             total_checked=total_checked,
-            matched=len(all_results),
+            matched=total_matched,
             pages=pages,
+            truncated=self.truncated,
         )
-        return all_results
 
     # ------------------------------------------------------------------
     # Parse / Detail
@@ -304,6 +406,7 @@ class FindATenderScraper(BaseScraper):
             "notice_type": raw.get("notice_type", ""),
             "published_date": raw.get("published_date", ""),
             "detail_url": raw.get("detail_url", ""),
+            "raw_release": raw.get("raw_release"),
         }
 
     async def get_application_detail(self, notice_id_or_url: str) -> dict[str, Any]:
@@ -469,6 +572,8 @@ def _parse_release(release: dict[str, Any]) -> dict[str, Any] | None:
         "notice_type": notice_type,
         "published_date": published_date,
         "detail_url": detail_url,
+        # The complete OCDS release, stored on scheme_contracts.raw_data.
+        "raw_release": release,
     }
 
 

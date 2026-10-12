@@ -38,7 +38,7 @@ SEEDS: list[dict] = [
         "postcode": "B16 8FY",
         "num_units": 206,
         "scheme_type": "BTR",
-        "status": "Operational",
+        "status": "operational",
         "operator_name": "Way of Life",
         "source_reference": "wayoflife.com/locations/birmingham/the-lansdowne; "
                             "tilburydouglas.co.uk/projects/the-lansdowne; "
@@ -52,7 +52,7 @@ SEEDS: list[dict] = [
         "postcode": "B1 3DQ",
         "num_units": 292,
         "scheme_type": "BTR",
-        "status": "Operational",
+        "status": "operational",
         "operator_name": "Centrick",
         "source_reference": "centrick.co.uk/our-communities/the-kettleworks-jewellery-quarter; "
                             "bdg.uk.com/projects/showcase/the-kettleworks-jewellery-quarter-birmingham",
@@ -80,7 +80,7 @@ SEEDS: list[dict] = [
         "postcode": "B15 1BF",
         "num_units": 214,
         "scheme_type": "BTR",
-        "status": "Operational",
+        "status": "operational",
         "operator_name": "Seven Living",
         "source_reference": "rightmove.co.uk/properties/172006223; "
                             "search.savills.com/property-detail/gbbmrebrm190041l; "
@@ -93,7 +93,7 @@ SEEDS: list[dict] = [
         "postcode": "B15 1DT",
         "num_units": 228,
         "scheme_type": "BTR",
-        "status": "Operational",
+        "status": "operational",
         "operator_name": "Seven Living",
         "source_reference": "centrick.co.uk/our-communities/st-martins-place-birmingham; "
                             "onthemarket.com/details/10665048; "

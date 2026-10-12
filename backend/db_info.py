@@ -20,7 +20,8 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 
-TABLES = ["planning_applications", "existing_schemes", "scheme_rents", "scheme_contracts",
+TABLES = ["planning_applications", "existing_schemes", "scheme_rents", "scheme_advertised_rents",
+          "scheme_room_rents", "scheme_incentives", "area_rent_benchmarks", "scheme_contracts",
           "scheme_observations", "scheme_room_types", "scheme_availability", "companies",
           "councils", "institutions", "hesa_enrolments", "transactions", "users"]
 

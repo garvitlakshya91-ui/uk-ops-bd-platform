@@ -20,6 +20,9 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # Defaults. Long-running tasks set their own soft_time_limit/time_limit
+    # on the task decorator (e.g. the Contracts Finder and Find a Tender
+    # scrapes) rather than raising these for everything.
     task_soft_time_limit=600,
     task_time_limit=900,
     task_default_queue="default",
@@ -143,9 +146,9 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute=45),
         "options": {"queue": "enrichment"},
     },
-    "enrich-schemes-epc-weekly": {
+    "enrich-schemes-epc-6-hourly": {
         "task": "app.tasks.enrichment_tasks.enrich_schemes_with_epc",
-        "schedule": crontab(hour=4, minute=30, day_of_week="wednesday"),
+        "schedule": crontab(minute=30, hour="*/6"),
         "options": {"queue": "enrichment"},
     },
     "enrich-all-companies-ch-daily": {
@@ -153,9 +156,9 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=0),
         "options": {"queue": "enrichment"},
     },
-    "enrich-all-companies-psc-daily": {
+    "enrich-all-companies-psc-6-hourly": {
         "task": "app.tasks.enrichment_tasks.enrich_all_companies_psc",
-        "schedule": crontab(hour=5, minute=0),
+        "schedule": crontab(hour="5,11,17,23", minute=0),
         "options": {"queue": "enrichment"},
     },
     "cross-reference-planning-schemes-daily": {

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from app.registry.core import LISTABLE_SQL
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -42,11 +44,12 @@ def map_schemes(
                COALESCE(es.lat, es.latitude)  AS la,
                COALESCE(es.lng, es.longitude) AS ln,
                es.scheme_type,
-               COALESCE(es.num_units, es.total_units),
+               COALESCE(es.num_units, es.total_units, es.beds_total),
                es.bd_score, es.arrears_risk_score, cc.name
         FROM existing_schemes es
         LEFT JOIN councils cc ON cc.id = es.council_id
         WHERE COALESCE(es.lat, es.latitude) IS NOT NULL
+          AND {LISTABLE_SQL}
           {type_clause}
     """)).fetchall()
     return {
@@ -86,6 +89,7 @@ def map_applications(
         FROM planning_applications pa
         LEFT JOIN councils cc ON cc.id = pa.council_id
         WHERE pa.latitude IS NOT NULL AND pa.longitude IS NOT NULL
+          AND NOT pa.is_clone
           {bd_clause}
         ORDER BY pa.bd_score DESC NULLS LAST
         LIMIT :lim

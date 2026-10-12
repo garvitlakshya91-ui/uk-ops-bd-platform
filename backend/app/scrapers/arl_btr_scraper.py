@@ -676,6 +676,12 @@ def save_arl_btr_schemes(
                 )
                 .first()
             )
+            # A retired duplicate keeps the feed's key; the refresh belongs
+            # to the row it was merged into.
+            hops = 0
+            while existing is not None and existing.merged_into_id and hops < 5:
+                existing = db.query(ExistingScheme).get(existing.merged_into_id)
+                hops += 1
 
             developer_id = _find_or_create_company(
                 scheme_data.get("developer", ""), "Developer"
@@ -707,10 +713,32 @@ def save_arl_btr_schemes(
                     "operator_company_id": operator_id,
                     "council_id": council_id,
                 }
+                # The registry decides whether a feed may rename a building;
+                # a refused spelling is kept as an alias.
+                from app.registry.core import propose_name
+                if propose_name(db, existing, field_map.pop("name"), "arl_btr") == "renamed":
+                    changed = True
+                # Protected fields go through set_field so a feed refresh
+                # cannot overwrite a higher-precedence value, and every
+                # change is logged with its old value.
+                from app.scrapers.field_protection import (
+                    WRITABLE_FIELDS,
+                    FieldValidationError,
+                    set_field,
+                )
                 for field, value in field_map.items():
-                    if value is not None and value != getattr(
-                        existing, field, None
-                    ):
+                    if value is None or value == getattr(existing, field, None):
+                        continue
+                    if field in WRITABLE_FIELDS:
+                        try:
+                            if set_field(
+                                existing, field, value,
+                                "arl_btr_open_operating", db,
+                            ):
+                                changed = True
+                        except FieldValidationError:
+                            continue
+                    else:
                         setattr(existing, field, value)
                         changed = True
 

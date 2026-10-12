@@ -77,39 +77,13 @@ async def test_all():
     except Exception as e:
         print(f"   FAILED - {e}")
 
-    # 4. EPC Open Data Communities
-    print("\n4. EPC Open Data Communities API...")
+    # 4. Energy Performance of Buildings Data API
+    print("\n4. Energy certificate (EPC) API...")
     try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                "https://epc.opendatacommunities.org/api/v1/domestic/search",
-                params={"postcode": "SW1A 1AA", "size": 1},
-                headers={
-                    "Authorization": f"Basic {settings.EPC_API_KEY}",
-                    "Accept": "application/json",
-                },
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                rows = resp.json().get("rows", [])
-                print(f"   OK - Found {len(rows)} EPC records for SW1A 1AA")
-            elif resp.status_code == 401:
-                # Try with token as bearer
-                resp2 = await client.get(
-                    "https://epc.opendatacommunities.org/api/v1/domestic/search",
-                    params={"postcode": "SW1A 1AA", "size": 1},
-                    headers={
-                        "Authorization": f"Bearer {settings.EPC_API_KEY}",
-                        "Accept": "application/json",
-                    },
-                    timeout=10,
-                )
-                if resp2.status_code == 200:
-                    print(f"   OK - Bearer auth works")
-                else:
-                    print(f"   WARN - Status {resp.status_code}/{resp2.status_code} - may need email:key base64 auth")
-            else:
-                print(f"   WARN - Status {resp.status_code}: {resp.text[:100]}")
+        from app.scrapers.epc_client import EPCClient
+        async with EPCClient() as client:
+            rows = await client.search_domestic(postcode="B7 4EH", max_results=5)
+            print(f"   OK - Found {len(rows)} EPC records for B7 4EH")
     except Exception as e:
         print(f"   FAILED - {e}")
 

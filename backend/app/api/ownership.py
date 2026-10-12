@@ -181,14 +181,14 @@ def target_schemes(
     """All schemes behind one pitch target (same grouping key as /targets)."""
     rows = db.execute(text("""
         SELECT es.id, es.name, cc.name AS council, es.scheme_type,
-               COALESCE(es.num_units, es.total_units) AS units,
+               COALESCE(es.num_units, es.total_units, es.beds_total) AS units,
                es.arrears_risk_score, co.name AS vehicle, es.postcode
         FROM existing_schemes es
         JOIN companies co ON co.id = es.owner_company_id
         LEFT JOIN councils cc ON cc.id = es.council_id
         WHERE co.ownership_checked_at IS NOT NULL
           AND COALESCE(NULLIF(co.ultimate_owner_name,''), co.name) = :t
-        ORDER BY COALESCE(es.num_units, es.total_units, 0) DESC NULLS LAST, es.name
+        ORDER BY COALESCE(es.num_units, es.total_units, es.beds_total, 0) DESC NULLS LAST, es.name
         LIMIT 200
     """), {"t": target}).fetchall()
     return {
@@ -230,7 +230,7 @@ def ownership_targets(
             COUNT(DISTINCT co.id) AS vehicles,
             COUNT(DISTINCT co.id) FILTER (WHERE co.is_spv_candidate) AS spvs,
             COUNT(DISTINCT es.id) AS schemes,
-            SUM(COALESCE(es.num_units, es.total_units, 0)) AS units,
+            SUM(COALESCE(es.num_units, es.total_units, es.beds_total, 0)) AS units,
             ARRAY_AGG(DISTINCT cc.name) AS councils,
             MAX(es.arrears_risk_score) AS max_arrears,
             ARRAY_AGG(DISTINCT co.name) AS vehicle_names

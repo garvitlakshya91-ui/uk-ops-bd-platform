@@ -20,11 +20,12 @@ from __future__ import annotations
 import argparse
 import datetime
 
-from sqlalchemy import text
+from sqlalchemy import or_
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.database import SessionLocal
-from app.models.models import Council, ExistingScheme, SchemeObservation, SchemeRent
+from app.models.models import (Council, ExistingScheme, SchemeAdvertisedRent, SchemeObservation,
+                               SchemeRoomRent)
 
 MIN_RENT_PPW = 60.0
 
@@ -59,20 +60,23 @@ def main() -> None:
     n2 = q2.count()
     touched = {o.scheme_id for o in q1} | {o.scheme_id for o in q2}
 
-    # 3. StuRents house listings and implausible rents on PBSA schemes
-    bad_rents = (db.query(SchemeRent)
-                 .join(ExistingScheme, ExistingScheme.id == SchemeRent.scheme_id)
-                 .filter(ExistingScheme.council_id == council.id,
-                         ExistingScheme.scheme_type == "PBSA",
-                         SchemeRent.is_current.is_(True),
-                         text("scheme_rents.source_reference LIKE '%/house/%' "
-                              "OR scheme_rents.rent_per_week < :floor")).params(floor=MIN_RENT_PPW)
-                 .all())
+    # 3. StuRents house listings and implausible rents on PBSA schemes,
+    # in both the advertised-price and the room-tier tables
+    bad_rents = []
+    for model in (SchemeAdvertisedRent, SchemeRoomRent):
+        bad_rents += (db.query(model)
+                      .join(ExistingScheme, ExistingScheme.id == model.scheme_id)
+                      .filter(ExistingScheme.council_id == council.id,
+                              ExistingScheme.scheme_type == "PBSA",
+                              model.is_current.is_(True),
+                              or_(model.source_reference.like("%/house/%"),
+                                  model.rent_ppw < MIN_RENT_PPW))
+                      .all())
     print(f"{args.city}: retracting {n1} derived build years, {n2} consent bed counts on "
           f"pre-existing schemes; superseding {len(bad_rents)} rent rows "
           f"({len({r.scheme_id for r in bad_rents})} schemes)")
     for r in bad_rents[:12]:
-        print(f"   rent  scheme {r.scheme_id} {r.source} £{r.rent_per_week} {r.source_reference}")
+        print(f"   rent  scheme {r.scheme_id} {r.source} £{r.rent_ppw} {r.source_reference}")
     if args.dry_run:
         print("(dry run)")
         return

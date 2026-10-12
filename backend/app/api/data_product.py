@@ -48,11 +48,16 @@ def _scheme_rows(db: Session, schemes: list[ExistingScheme], publication: bool) 
     ids = [s.id for s in schemes] or [0]
     companies = {c.id: c for c in db.query(Company).filter(Company.id.in_(
         [x for s in schemes for x in (s.operator_company_id, s.owner_company_id) if x] or [0]))}
+    # Room tiers first, then listing entry prices labelled as such.
     rents = db.execute(text("""
-        SELECT scheme_id, room_type, sub_classification, rent_per_week,
-               contract_length_weeks, academic_year, source, scraped_at
-        FROM scheme_rents WHERE is_current AND scheme_id = ANY(:ids)
-        ORDER BY scheme_id, rent_per_week
+        SELECT scheme_id, room_type, sub_classification, rent_ppw,
+               contract_length_weeks, academic_year, source, captured_at
+        FROM scheme_room_rents WHERE is_current AND scheme_id = ANY(:ids)
+        UNION ALL
+        SELECT scheme_id, kind || ' (advertised)', NULL, rent_ppw,
+               contract_length_weeks, academic_year, source, captured_at
+        FROM scheme_advertised_rents WHERE is_current AND scheme_id = ANY(:ids)
+        ORDER BY 1, 4
     """), {"ids": ids}).fetchall()
     rent_by: dict[int, list] = {}
     for r in rents:
@@ -165,6 +170,7 @@ def competitor_set(
 
     apps = (db.query(PlanningApplication)
             .filter(PlanningApplication.is_pbsa.is_(True),
+                    PlanningApplication.is_clone.is_(False),
                     PlanningApplication.latitude.between(lat - box, lat + box),
                     PlanningApplication.longitude.between(lng - box * 1.6, lng + box * 1.6)).all())
     pipeline = []

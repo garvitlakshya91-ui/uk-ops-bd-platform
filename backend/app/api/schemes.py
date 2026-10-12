@@ -2,7 +2,7 @@ import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, and_, or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -93,12 +93,15 @@ class SchemeUpdate(BaseModel):
 class SchemeResponse(SchemeBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    # Units, falling back to beds: read from ExistingScheme.unit_count.
+    num_units: Optional[int] = Field(default=None, validation_alias="unit_count")
     operator_company: Optional[CompanyBrief] = None
     owner_company: Optional[CompanyBrief] = None
     asset_manager_company: Optional[CompanyBrief] = None
     landlord_company: Optional[CompanyBrief] = None
     council: Optional[CouncilBrief] = None
     status: Optional[str] = None
+    completion_date: Optional[datetime.date] = None
     source: Optional[str] = None
     last_verified_at: Optional[datetime.datetime] = None
     data_confidence_score: Optional[float] = None
@@ -176,6 +179,8 @@ def list_schemes(
         joinedload(ExistingScheme.landlord_company),
         joinedload(ExistingScheme.council),
     )
+    from app.registry.core import listable_filters
+    query = query.filter(*listable_filters())
 
     if search is not None:
         like_term = f"%{search}%"
@@ -213,7 +218,12 @@ def list_schemes(
     if min_performance_rating is not None:
         query = query.filter(ExistingScheme.performance_rating >= min_performance_rating)
 
-    sort_col = getattr(ExistingScheme, sort_by)
+    # Sort and report size as units, falling back to beds (unit_count).
+    sort_col = (
+        ExistingScheme.unit_count
+        if sort_by == "num_units"
+        else getattr(ExistingScheme, sort_by)
+    )
     if sort_order == "desc":
         sort_col = sort_col.desc().nullslast()
     else:
@@ -244,6 +254,8 @@ def expiring_schemes(
             joinedload(ExistingScheme.owner_company),
             joinedload(ExistingScheme.council),
         )
+        .filter(ExistingScheme.merged_into_id.is_(None),
+                ExistingScheme.record_class.notin_(("ingest_artefact", "procurement_notice", "listing_fragment")))
         .filter(
             and_(
                 ExistingScheme.contract_end_date.isnot(None),
@@ -361,6 +373,12 @@ def update_scheme(
         raise HTTPException(status_code=404, detail="Scheme not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    name = update_data.pop("name", None)
+    if name is not None:
+        # A person renaming a scheme outranks every feed; the old name
+        # stays as an alias and the change is logged.
+        from app.registry.core import propose_name
+        propose_name(db, scheme, name, "manual", changed_by=current_user.email)
     for field, value in update_data.items():
         setattr(scheme, field, value)
 

@@ -51,14 +51,11 @@ logger = structlog.get_logger(__name__)
 _POSTCODE_RE = re.compile(
     r"\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b", re.IGNORECASE
 )
-_BED_COUNT_PATTERNS: list[re.Pattern] = [
-    # Very specific: "500 beds", "500 bed spaces", "500 bedrooms", "500 student rooms"
-    re.compile(r"\b(\d{2,4})\s*(?:bed[\s-]?spaces|beds|bedrooms|student\s+rooms|student\s+beds)\b", re.IGNORECASE),
-    # "500 studios" / "500 en-suite rooms"
-    re.compile(r"\b(\d{2,4})\s*(?:studios|en[\s-]?suite\s+rooms?|cluster\s+rooms?)\b", re.IGNORECASE),
-    # "home to 500" / "accommodates 500"
-    re.compile(r"(?:home\s+to|accommodates?|houses?|hosts?)\s+(\d{2,4})\s+students?", re.IGNORECASE),
-]
+# Pages state capacity in the same shapes as planning text; the shared
+# extractor reads them and scores how firmly the page says it.
+from app.extraction.units import extract_units  # noqa: E402
+
+PAGE_BED_MIN_CONFIDENCE = 0.6   # "housing over 200 students" scores 0.51 and is refused
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -80,18 +77,11 @@ def extract_postcode(text: str | None) -> str | None:
 
 
 def extract_bed_count(text: str | None) -> int | None:
-    """Best-effort extraction of bed/room count from a string."""
-    if not text:
-        return None
-    for pat in _BED_COUNT_PATTERNS:
-        m = pat.search(text)
-        if m:
-            try:
-                n = int(m.group(1).replace(",", ""))
-                if 20 <= n <= 5000:
-                    return n
-            except ValueError:
-                continue
+    """Bed count a page states firmly; None for marketing round-ups
+    ("housing over 200 students") whose confidence falls below the bar."""
+    fig = extract_units(text).best("beds")
+    if fig and fig.confidence >= PAGE_BED_MIN_CONFIDENCE and 20 <= fig.value <= 5000:
+        return fig.value
     return None
 
 

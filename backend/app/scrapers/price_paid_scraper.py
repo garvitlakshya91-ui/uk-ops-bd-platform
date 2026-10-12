@@ -415,8 +415,10 @@ def save_price_paid_schemes(
                 if scheme_data["total_units"] != existing.num_units:
                     existing.num_units = scheme_data["total_units"]
                     changed = True
-                if scheme_data["name"] != existing.name:
-                    existing.name = scheme_data["name"]
+                # The registry decides whether a feed may rename a building;
+                # a refused spelling is kept as an alias.
+                from app.registry.core import propose_name
+                if propose_name(db, existing, scheme_data["name"], "land_registry_price_paid") == "renamed":
                     changed = True
                 if scheme_data["address"] and scheme_data["address"] != existing.address:
                     existing.address = scheme_data["address"]
@@ -433,6 +435,7 @@ def save_price_paid_schemes(
                     num_units=scheme_data["total_units"],
                     status="operational",
                     source="land_registry_price_paid",
+                    record_class="development_cluster",
                     source_reference=source_ref,
                     data_confidence_score=0.6,  # Moderate — inferred from transaction clusters
                 )

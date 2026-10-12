@@ -308,9 +308,14 @@ out["pipeline"] = {
 
 # ---- rents ----
 rents = db.execute(text("""
- select r.scheme_id, r.room_type, r.sub_classification, r.rent_per_week, r.academic_year, r.source, r.contract_length_weeks
- from scheme_rents r join existing_schemes s on s.id=r.scheme_id join councils c on c.id=s.council_id
- where c.name='Birmingham' and r.is_current and r.rent_per_week is not null""")).mappings().all()
+ select r.scheme_id, r.room_type, r.kind, r.sub_classification, r.rent_ppw, r.academic_year, r.source, r.contract_length_weeks
+ from (select scheme_id, room_type, null as kind, sub_classification, rent_ppw, academic_year, source, contract_length_weeks, is_current
+         from scheme_room_rents
+       union all
+       select scheme_id, null, kind, null, rent_ppw, academic_year, source, contract_length_weeks, is_current
+         from scheme_advertised_rents) r
+ join existing_schemes s on s.id=r.scheme_id join councils c on c.id=s.council_id
+ where c.name='Birmingham' and r.is_current and r.rent_ppw is not null""")).mappings().all()
 name_by_id = {r["id"]: r["name"] for r in priv}
 TYPE_MAP = {"studio": "Studio", "en-suite": "En-suite", "ensuite": "En-suite", "en suite": "En-suite",
             "non en-suite": "Non en-suite", "non-ensuite": "Non en-suite", "standard": "Non en-suite",
@@ -346,10 +351,10 @@ our_pairs = collections.defaultdict(list)
 our_from = collections.defaultdict(list)
 for r in rents:
     t = tnorm(r["room_type"])
-    if t in ("From (advertised)",):
-        our_from[r["scheme_id"]].append((float(r["rent_per_week"]), r["source"], r["academic_year"]))
+    if r["kind"] == "from":
+        our_from[r["scheme_id"]].append((float(r["rent_ppw"]), r["source"], r["academic_year"]))
     elif t in ("Studio", "En-suite", "Non en-suite", "1-bed apartment", "2-bed apartment") and r["academic_year"] == "2026-27":
-        our_pairs[(r["scheme_id"], t)].append(float(r["rent_per_week"]))
+        our_pairs[(r["scheme_id"], t)].append(float(r["rent_ppw"]))
 pair_rows = []
 for k, vals in our_pairs.items():
     if k in pack_pairs:
@@ -381,7 +386,7 @@ out["rents"] = {
     "pair_rows": pair_rows,
     "from_compared": len(from_rows), "from_within_5": sum(1 for d in fdiffs if abs(d) <= 5), "from_within_10": sum(1 for d in fdiffs if abs(d) <= 10),
     "from_median_diff_pct": round(statistics.median(fdiffs), 1) if fdiffs else None, "from_rows": from_rows,
-    "ours_type_medians": {t: statistics.median([float(r["rent_per_week"]) for r in rents if tnorm(r["room_type"]) == t]) for t in ("Studio", "En-suite", "Non en-suite")},
+    "ours_type_medians": {t: statistics.median([float(r["rent_ppw"]) for r in rents if tnorm(r["room_type"]) == t]) for t in ("Studio", "En-suite", "Non en-suite")},
     "pack_type_medians": {t: statistics.median([p["p2627"] for p in prices if tnorm(p["room_type"]) == t]) for t in ("Studio", "En-suite", "Non en-suite") if any(tnorm(p["room_type"]) == t for p in prices)},
 }
 

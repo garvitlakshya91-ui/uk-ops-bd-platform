@@ -275,8 +275,8 @@ def _persist_spvs(db: Session, spv_data: dict[str, Any]) -> dict[str, int]:
                 ),
                 company_id=company.id,
                 source="companies_house_spv_tracker",
-                stage="Lead",
-                priority="Medium",
+                stage="identified",
+                priority="warm",
             )
             db.add(opportunity)
             new_opportunities += 1
@@ -477,8 +477,8 @@ def ingest_land_registry_ccod_ownership(
                         description=description,
                         company_id=company_id,
                         source="land_registry_ccod",
-                        stage="Research",
-                        priority="Low" if portfolio.title_count < 5 else "Medium",
+                        stage="researched",
+                        priority="cold" if portfolio.title_count < 5 else "warm",
                     )
                     db.add(opp)
                     new_opportunities += 1
@@ -666,13 +666,13 @@ def enrich_company_ownership(self) -> dict[str, Any]:
                 existing_opp.description = description
                 existing_opp.last_activity_date = datetime.date.today()
             else:
-                priority = "High" if portfolio.title_count >= 3 else "Medium"
+                priority = "hot" if portfolio.title_count >= 3 else "warm"
                 opp = PipelineOpportunity(
                     title=f"SPV site acquisition: {company.name}",
                     description=description,
                     company_id=company.id,
                     source="spv_ccod_crossref",
-                    stage="Lead",
+                    stage="identified",
                     priority=priority,
                     last_activity_date=datetime.date.today(),
                 )

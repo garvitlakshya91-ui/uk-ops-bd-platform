@@ -684,6 +684,11 @@ def _create_scheme_contract(
             .first()
         )
         if existing_contract:
+            # Contracts loaded before raw storage existed have no raw_data;
+            # fill it in the next time the same notice is scraped.
+            if not existing_contract.raw_data and raw_record:
+                existing_contract.raw_data = _json_safe(raw_record)
+                db.flush()
             logger.debug(
                 "contract_already_exists",
                 scheme_id=scheme.id,
@@ -945,6 +950,7 @@ def ingest_tender_contracts(
                     contract_start_date=contract_data.start_date,
                     contract_end_date=contract_data.end_date,
                     source="find_a_tender",
+                    record_class="procurement_notice",
                     source_reference=contract_data.source_reference,
                     last_verified_at=datetime.now(timezone.utc),
                 )
@@ -1152,6 +1158,7 @@ def ingest_contracts_finder(
                     contract_start_date=contract_data.start_date,
                     contract_end_date=contract_data.end_date,
                     source="contracts_finder",
+                    record_class="procurement_notice",
                     source_reference=contract_data.source_reference,
                     last_verified_at=datetime.now(timezone.utc),
                 )

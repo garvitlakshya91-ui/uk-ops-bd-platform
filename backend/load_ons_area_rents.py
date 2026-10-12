@@ -1,15 +1,18 @@
-"""Load ONS PIPR area rent levels as estimates for rent-less BD schemes.
+"""Load ONS PIPR area rent levels as council-level benchmarks.
 
 Source: ONS Price Index of Private Rents (monthly, free) — average private
 rent levels per local authority by bedroom count. These are AREA averages,
-not scheme rents, and are stored clearly labelled:
+not scheme rents, and are stored in ``area_rent_benchmarks`` — one row
+per council x segment x period, never attached to a scheme:
 
     source        = 'ons_pipr_area'
-    room_type     = 'Area avg 1-bed (LA)' / '2-bed' / '3-bed'
+    segment       = 'Area avg 1-bed (LA)' / '2-bed' / '3-bed'
+    period        = '2026-06' (the workbook's latest month)
 
-Applied to BD schemes (BTR / Senior / Co-living) that have no observed
-rent rows. Also fills existing_schemes.avg_rent_pcm (2-bed value) where
-empty. Idempotent: wipes + reloads its own source label.
+Also fills existing_schemes.avg_rent_pcm (LA 2-bed value) on rent-less
+BD schemes (BTR / Senior / Co-living) where empty. Idempotent: a newer
+month supersedes the previous month's rows; reloading the same month
+only writes where a value changed.
 
 Usage:
     python load_ons_area_rents.py [--dry-run] [--file data/ons/pipr_2026_06.xlsx]
@@ -25,11 +28,11 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(__file__))
 
 import openpyxl
-from sqlalchemy import create_engine, text
+from sqlalchemy import func, text
 
-DB_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/uk_ops_bd"
-)
+from app.database import SessionLocal
+from app.models.models import AreaRentBenchmark
+from app.models.rents import record_area_benchmark
 
 SOURCE = "ons_pipr_area"
 # LA-level ONS codes (England unitary/district/met/London, Wales, Scotland, NI)
@@ -100,15 +103,16 @@ def main():
         if prev is None or (r[0] and r[0] > prev[0]):
             latest[code] = r
     period = max(r[0] for r in latest.values())
-    print(f"  {len(latest):,} local authorities, latest period {period:%Y-%m}")
+    period_label = f"{period:%Y-%m}"
+    print(f"  {len(latest):,} local authorities, latest period {period_label}")
 
-    engine = create_engine(DB_URL)
+    db = SessionLocal()
     stats = Counter()
-    with engine.begin() as c:
-        councils = c.execute(text("SELECT id, name FROM councils")).fetchall()
+    try:
+        councils = db.execute(text("SELECT id, name FROM councils")).fetchall()
         by_norm = {norm(n): i for i, n in councils}
 
-        la_rents: dict[int, list] = {}   # council_id -> [(label, pcm), ...]
+        la_rents: dict[int, list] = {}   # council_id -> [(label, pcm, code, name), ...]
         unmatched = []
         for code, r in latest.items():
             # Scottish BRMAs fan out to their member councils; everything
@@ -130,31 +134,50 @@ def main():
                 except (TypeError, ValueError):
                     continue
                 if pcm > 0:
-                    vals.append((label, pcm, str(code)))
+                    vals.append((label, pcm, str(code), r[2]))
             if vals:
                 for cid in cids:
                     la_rents.setdefault(cid, vals)
         print(f"  matched {len(la_rents):,} councils "
               f"({len(unmatched)} ONS areas unmatched)")
 
-        schemes = c.execute(text("""
+        if not args.dry_run:
+            # Append-only: supersede, never delete — each monthly ONS
+            # load becomes a point in the area-rent series. Rows for the
+            # month being loaded stay current so a reload is a no-op.
+            stats["superseded"] += (
+                db.query(AreaRentBenchmark)
+                .filter(AreaRentBenchmark.source == SOURCE,
+                        AreaRentBenchmark.is_current.is_(True),
+                        AreaRentBenchmark.period != period_label)
+                .update({"is_current": False, "superseded_at": func.now()},
+                        synchronize_session=False))
+
+        # one benchmark row per council x segment x period
+        for cid, vals in la_rents.items():
+            for label, pcm, code, name in vals:
+                stats["benchmark_rows"] += 1
+                if args.dry_run:
+                    continue
+                outcome = record_area_benchmark(
+                    db, council_id=cid, source=SOURCE, segment=label,
+                    rent_pcm=pcm, rent_ppw=round(pcm * 12 / 52, 2),
+                    period=period_label, area_code=code, area_name=name,
+                    source_reference=f"ONS PIPR {period_label} {code}")
+                stats[f"benchmark_{outcome}"] += 1
+
+        # rent-less BD schemes: fill avg_rent_pcm from the LA 2-bed average
+        schemes = db.execute(text("""
             SELECT es.id, es.council_id, es.avg_rent_pcm IS NULL
             FROM existing_schemes es
             WHERE es.scheme_type IN ('BTR','Senior','Co-living')
               AND es.council_id IS NOT NULL
-              AND NOT EXISTS (SELECT 1 FROM scheme_rents sr
-                              WHERE sr.scheme_id = es.id
-                                AND sr.source <> :src)
-        """), {"src": SOURCE}).fetchall()
+              AND NOT EXISTS (SELECT 1 FROM scheme_room_rents rr
+                              WHERE rr.scheme_id = es.id)
+              AND NOT EXISTS (SELECT 1 FROM scheme_advertised_rents ar
+                              WHERE ar.scheme_id = es.id)
+        """)).fetchall()
         print(f"  {len(schemes):,} rent-less BTR/Senior/Co-living schemes")
-
-        if not args.dry_run:
-            # Append-only: supersede, never delete — each monthly ONS
-            # load becomes a point in the area-rent series.
-            c.execute(text("""
-                UPDATE scheme_rents SET is_current = FALSE, superseded_at = NOW()
-                WHERE is_current AND source = :s
-            """), {"s": SOURCE})
 
         for sid, cid, no_avg in schemes:
             vals = la_rents.get(cid)
@@ -162,30 +185,26 @@ def main():
                 stats["no_la_data"] += 1
                 continue
             stats["schemes_covered"] += 1
-            for label, pcm, code in vals:
-                stats["rows"] += 1
-                if args.dry_run:
-                    continue
-                c.execute(text("""
-                    INSERT INTO scheme_rents
-                        (scheme_id, room_type, rent_per_month, rent_per_week,
-                         currency, source, source_reference,
-                         scraped_at, created_at)
-                    VALUES (:sid, :rt, :pcm, :ppw, 'GBP', :src, :ref,
-                            NOW(), NOW())
-                """), {"sid": sid, "rt": label, "pcm": pcm,
-                       "ppw": round(pcm * 12 / 52, 2), "src": SOURCE,
-                       "ref": f"ONS PIPR {period:%Y-%m} {code}"})
-            if no_avg and not args.dry_run:
-                two_bed = next((p for l, p, _ in vals if "2-bed" in l), None)
+            if no_avg:
+                two_bed = next((p for l, p, _, _ in vals if "2-bed" in l), None)
                 if two_bed:
-                    c.execute(text("""
+                    stats["avg_rent_pcm_filled"] += 1
+                    if args.dry_run:
+                        continue
+                    db.execute(text("""
                         UPDATE existing_schemes
                         SET avg_rent_pcm = :p,
                             notes = LEFT(COALESCE(notes,'') ||
                                     ' avg_rent_pcm = ONS LA 2-bed average.', 1000)
                         WHERE id = :sid AND avg_rent_pcm IS NULL
                     """), {"p": two_bed, "sid": sid})
+
+        if args.dry_run:
+            db.rollback()
+        else:
+            db.commit()
+    finally:
+        db.close()
 
     print(f"\n=== {'DRY RUN' if args.dry_run else 'APPLIED'} ===")
     for k, v in stats.most_common():

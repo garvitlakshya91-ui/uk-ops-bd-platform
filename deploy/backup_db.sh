@@ -75,7 +75,7 @@ PGV=$(psql_cmd -c "SHOW server_version;" | head -n 1)
 DBSIZE=$(psql_cmd -c "SELECT pg_size_pretty(pg_database_size(current_database()));" | head -n 1)
 ALEMBIC=$(psql_cmd -c "SELECT CASE WHEN to_regclass('public.alembic_version') IS NULL THEN 'none' ELSE (SELECT version_num FROM alembic_version LIMIT 1) END;" | head -n 1)
 COUNTS=$(psql_cmd -c "SELECT t || ',' || (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I', t), false, true, '')))[1]::text
-FROM unnest(ARRAY['planning_applications','existing_schemes','scheme_rents','scheme_contracts','scheme_observations','scheme_room_types','scheme_availability','scheme_events','transactions','companies','councils','institutions','hesa_enrolments','hesa_term_time_accommodation','maintenance_loans','yield_benchmarks','pipeline_opportunities','brownfield_sites','title_ownership','scraper_runs','alerts','users']) AS t
+FROM unnest(ARRAY['planning_applications','existing_schemes','scheme_rents','scheme_advertised_rents','scheme_room_rents','scheme_incentives','area_rent_benchmarks','scheme_contracts','scheme_observations','scheme_room_types','scheme_availability','scheme_events','transactions','companies','councils','institutions','hesa_enrolments','hesa_term_time_accommodation','maintenance_loans','yield_benchmarks','pipeline_opportunities','brownfield_sites','title_ownership','scraper_runs','alerts','users']) AS t
 WHERE to_regclass('public.' || t) IS NOT NULL;")
 
 {

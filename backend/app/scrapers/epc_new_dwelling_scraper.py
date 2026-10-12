@@ -1,17 +1,15 @@
 """
 EPC New-Dwelling Discovery Scraper.
 
-Uses the EPC Open Data Communities API to discover new-build residential
-schemes by filtering for transaction-type = "new dwelling" and clustering
-results by postcode + lodgement period.
+Uses the Energy Performance of Buildings Data API to discover new-build
+residential schemes: new-dwelling certificates clustered by postcode +
+lodgement period.
 
 Every new dwelling in England & Wales requires an EPC before sale or let,
 making this the most comprehensive source for identifying completed and
 near-completion private development schemes.
 
-API: https://epc.opendatacommunities.org/api/v1/domestic/search
-Auth: Basic auth (free registration required)
-Docs: https://epc.opendatacommunities.org/docs/api
+API and auth: see app.scrapers.epc_client.
 
 Strategy:
     1. Query each local authority for new-dwelling EPCs in a date range
@@ -22,26 +20,19 @@ Strategy:
 
 from __future__ import annotations
 
-import base64
 import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
-import httpx
 import structlog
 
-from app.config import settings
+from app.scrapers.epc_client import EPCClient
 
 logger = structlog.get_logger(__name__)
 
-EPC_API_BASE = "https://epc.opendatacommunities.org/api/v1"
-
 # Minimum units in a postcode cluster to consider it a scheme
 MIN_CLUSTER_UNITS = 5
-
-# EPC local-authority codes are ONS codes (e.g. E09000001)
-# We'll query by local-authority parameter
 
 
 class EPCNewDwellingScraper:
@@ -55,172 +46,58 @@ class EPCNewDwellingScraper:
 
     def __init__(
         self,
-        api_key: str | None = None,
         days_back: int = 365,
         min_cluster_size: int = MIN_CLUSTER_UNITS,
+        client: EPCClient | None = None,
     ) -> None:
         self.log = logger.bind(scraper="EPCNewDwellingScraper")
-        self.api_key = api_key or settings.EPC_API_KEY
         self.days_back = days_back
         self.min_cluster_size = min_cluster_size
-        self.client: httpx.AsyncClient | None = None
-
-    def _auth_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {
-            "Accept": "application/json",
-        }
-        if self.api_key:
-            if ":" in self.api_key:
-                token = base64.b64encode(self.api_key.encode()).decode()
-            else:
-                token = base64.b64encode(f"{self.api_key}:".encode()).decode()
-            headers["Authorization"] = f"Basic {token}"
-        return headers
+        self.client = client or EPCClient()
 
     async def __aenter__(self) -> "EPCNewDwellingScraper":
-        self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(60.0, connect=15.0),
-            follow_redirects=True,
-            headers={
-                "User-Agent": "UK-Ops-BD-Platform/1.0",
-                **self._auth_headers(),
-            },
-        )
+        await self.client.__aenter__()
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        if self.client:
-            await self.client.aclose()
-            self.client = None
+        await self.client.__aexit__(*args)
 
     # ------------------------------------------------------------------
     # API query
     # ------------------------------------------------------------------
 
-    async def _fetch_page(
-        self,
-        params: dict[str, Any],
-    ) -> tuple[list[dict[str, Any]], int | None]:
-        """
-        Fetch a page from the EPC domestic search API.
-
-        Returns (rows, total_count).  total_count may be None if the
-        API doesn't provide it in the response headers.
-        """
-        if not self.client:
-            raise RuntimeError("Client not initialised — use async with")
-
-        url = f"{EPC_API_BASE}/domestic/search"
-        resp = await self.client.get(url, params=params)
-        resp.raise_for_status()
-
-        if not resp.text or resp.text.strip() == "":
-            return [], None, None
-
-        data = resp.json()
-        rows = data.get("rows", [])
-
-        # X-Total-Count header gives total matches
-        total_str = resp.headers.get("X-Total-Count")
-        total = int(total_str) if total_str else None
-
-        # X-Next-Search-After header for cursor-based pagination
-        next_cursor = resp.headers.get("X-Next-Search-After")
-
-        return rows, total, next_cursor
-
     async def fetch_new_dwellings(
         self,
         local_authority: str | None = None,
-        from_year: int | None = None,
-        from_month: int | None = None,
-        to_year: int | None = None,
-        to_month: int | None = None,
-        max_results: int = 500000,
+        date_start: date | None = None,
+        date_end: date | None = None,
+        min_per_postcode: int = 1,
     ) -> list[dict[str, Any]]:
         """
-        Fetch new-dwelling EPCs, optionally filtered by local authority
-        and date range.
+        Fetch new-dwelling EPCs lodged in a date range (the last
+        ``days_back`` days by default), optionally for one local authority.
 
-        Uses the search-after cursor for efficient pagination beyond
-        the 5,000-row API page limit.
+        ``local_authority`` is the council's name as the register lists it
+        ("Birmingham", "Bristol, City of"); the register no longer takes ONS
+        codes. ``min_per_postcode`` skips postcodes with fewer candidate
+        certificates than that, which saves a request per certificate.
         """
-        start_date = date.today() - timedelta(days=self.days_back)
-        if from_year is None:
-            from_year = start_date.year
-        if from_month is None:
-            from_month = start_date.month
+        if date_start is None:
+            date_start = date.today() - timedelta(days=self.days_back)
 
-        now = date.today()
-        if to_year is None:
-            to_year = now.year
-        if to_month is None:
-            to_month = now.month
-
-        params: dict[str, Any] = {
-            "transaction-type": "new dwelling",
-            "size": 5000,
-            "from-year": from_year,
-            "from-month": from_month,
-            "to-year": to_year,
-            "to-month": to_month,
-        }
-        if local_authority:
-            params["local-authority"] = local_authority
-
-        all_rows: list[dict[str, Any]] = []
-        search_after: str | None = None
-
-        while len(all_rows) < max_results:
-            if search_after:
-                params["search-after"] = search_after
-
-            try:
-                rows, total, next_cursor = await self._fetch_page(params)
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 429:
-                    self.log.warning("epc_rate_limited", la=local_authority)
-                    import asyncio
-                    await asyncio.sleep(30)
-                    continue
-                if exc.response.status_code == 404:
-                    break
-                raise
-            except Exception as exc:
-                self.log.warning(
-                    "epc_fetch_error",
-                    error=str(exc),
-                    la=local_authority,
-                )
-                break
-
-            if not rows:
-                break
-
-            all_rows.extend(rows)
-
-            self.log.debug(
-                "epc_page_fetched",
-                la=local_authority,
-                page_size=len(rows),
-                total_so_far=len(all_rows),
-                total_available=total,
-            )
-
-            if len(rows) < 5000:
-                break
-
-            # Use cursor from X-Next-Search-After header, fall back to lmk-key
-            search_after = next_cursor or rows[-1].get("lmk-key", "")
-            if not search_after:
-                break
+        rows = await self.client.search_new_dwellings(
+            council=local_authority,
+            date_start=date_start,
+            date_end=date_end,
+            min_per_postcode=min_per_postcode,
+        )
 
         self.log.info(
             "epc_new_dwellings_fetched",
             la=local_authority,
-            count=len(all_rows),
+            count=len(rows),
         )
-        return all_rows
+        return rows
 
     # ------------------------------------------------------------------
     # Clustering
@@ -300,7 +177,6 @@ class EPCNewDwellingScraper:
             avg_floor_area = round(sum(floor_areas) / len(floor_areas), 1) if floor_areas else None
 
             # Local authority from first cert
-            la = certs[0].get("local-authority", "")
             la_label = certs[0].get("local-authority-label", "")
 
             # Try to extract a common scheme name from addresses
@@ -321,7 +197,6 @@ class EPCNewDwellingScraper:
                 "postcode": postcode,
                 "name": scheme_name,
                 "num_units": len(certs),
-                "local_authority": la,
                 "local_authority_label": la_label,
                 "scheme_type": scheme_type,
                 "dominant_property_type": dominant_type,
@@ -407,21 +282,23 @@ class EPCNewDwellingScraper:
         Parameters
         ----------
         local_authorities : list[str] | None
-            ONS codes to query. If None, queries nationwide (no LA filter).
+            Council names to query. If None, queries nationwide (no LA filter).
         """
-        import asyncio
-
         all_certs: list[dict[str, Any]] = []
 
+        # Postcodes too small to form a cluster are skipped before their
+        # certificates are fetched; cluster_by_postcode would drop them anyway.
         if local_authorities:
             for la in local_authorities:
-                certs = await self.fetch_new_dwellings(local_authority=la)
+                certs = await self.fetch_new_dwellings(
+                    local_authority=la, min_per_postcode=self.min_cluster_size,
+                )
                 all_certs.extend(certs)
-                # Be polite — 1s between LA queries
-                await asyncio.sleep(1.0)
         else:
             # Nationwide query (no LA filter)
-            all_certs = await self.fetch_new_dwellings()
+            all_certs = await self.fetch_new_dwellings(
+                min_per_postcode=self.min_cluster_size,
+            )
 
         self.log.info("epc_total_new_dwellings", count=len(all_certs))
 
@@ -530,6 +407,7 @@ def save_epc_discovered_schemes(
                     num_units=scheme_data.get("num_units"),
                     epc_ratings=scheme_data.get("epc_ratings"),
                     source="epc_new_dwelling",
+                    record_class="development_cluster",
                     source_reference=source_ref,
                     data_confidence_score=0.75,
                 )

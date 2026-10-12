@@ -9,7 +9,7 @@ listings into scheme candidates (one per name+postcode), then:
      fills operator_company_id from the AFS accommodationProvider
      (unless that field is locked).
 
-Sets scheme_type='PBSA', status='Operational', source='afs_directory'.
+Sets scheme_type='PBSA', status='operational', source='afs_directory'.
 Rent ppw is converted to avg_rent_pcm (x52/12). Coordinates stored.
 
 Usage:
@@ -256,7 +256,7 @@ def main():
                          source, source_reference, notes,
                          created_at, updated_at, locked_fields)
                     VALUES
-                        (:n, :a, :pc, :cid, 'PBSA', 'Operational',
+                        (:n, :a, :pc, :cid, 'PBSA', 'operational',
                          :op, :lat, :lng, :rent,
                          'afs_directory', :ref, :notes,
                          NOW(), NOW(), '{}'::jsonb)

@@ -128,6 +128,7 @@ def generate_alerts() -> dict[str, Any]:
     db = _get_db()
     try:
         from app.models.models import Alert, ExistingScheme, PlanningApplication, ScraperRun
+        from app.registry.core import reportable_filters
         from app.scoring.bd_scorer import BDScorer
 
         scorer = BDScorer(db_session=db)
@@ -147,6 +148,10 @@ def generate_alerts() -> dict[str, Any]:
                 ExistingScheme.contract_end_date.isnot(None),
                 ExistingScheme.contract_end_date <= three_months,
                 ExistingScheme.contract_end_date >= today,
+                # Only real schemes get contract-expiry alerts: not EPC
+                # clusters, procurement notices, artefacts, fragments or
+                # retired duplicates.
+                *reportable_filters(),
             )
             .all()
         )
@@ -172,7 +177,7 @@ def generate_alerts() -> dict[str, Any]:
                 title=f"Contract expiring: {scheme.name} ({days_left} days remaining)",
                 message=(
                     f"The management contract for {scheme.name} "
-                    f"({scheme.num_units or '?'} units, {scheme.postcode or 'unknown location'}) "
+                    f"({scheme.unit_count or '?'} units, {scheme.postcode or 'unknown location'}) "
                     f"expires on {scheme.contract_end_date}. "
                     f"Action required to prepare BD approach."
                 ),
@@ -187,7 +192,7 @@ def generate_alerts() -> dict[str, Any]:
         one_hour_ago = now - datetime.timedelta(hours=1)
         new_apps = (
             db.query(PlanningApplication)
-            .filter(PlanningApplication.created_at >= one_hour_ago)
+            .filter(PlanningApplication.created_at >= one_hour_ago, PlanningApplication.is_clone.is_(False))
             .all()
         )
 

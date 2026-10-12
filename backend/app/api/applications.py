@@ -128,7 +128,11 @@ def list_applications(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    query = db.query(PlanningApplication).options(joinedload(PlanningApplication.council))
+    query = (
+        db.query(PlanningApplication)
+        .options(joinedload(PlanningApplication.council))
+        .filter(PlanningApplication.is_clone.is_(False))
+    )
 
     if council_id is not None:
         query = query.filter(PlanningApplication.council_id == council_id)
@@ -177,6 +181,7 @@ def recent_applications(
     items = (
         db.query(PlanningApplication)
         .options(joinedload(PlanningApplication.council))
+        .filter(PlanningApplication.is_clone.is_(False))
         .order_by(PlanningApplication.created_at.desc())
         .limit(limit)
         .all()
@@ -186,7 +191,12 @@ def recent_applications(
 
 @router.get("/stats", response_model=ApplicationStats)
 def application_stats(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    total = db.query(func.count(PlanningApplication.id)).scalar() or 0
+    total = (
+        db.query(func.count(PlanningApplication.id))
+        .filter(PlanningApplication.is_clone.is_(False))
+        .scalar()
+        or 0
+    )
 
     by_scheme_type = [
         SchemeTypeCount(scheme_type=row[0], count=row[1])
@@ -194,6 +204,7 @@ def application_stats(current_user: User = Depends(get_current_user), db: Sessio
             PlanningApplication.scheme_type,
             func.count(PlanningApplication.id),
         )
+        .filter(PlanningApplication.is_clone.is_(False))
         .group_by(PlanningApplication.scheme_type)
         .order_by(func.count(PlanningApplication.id).desc())
         .all()
@@ -205,6 +216,7 @@ def application_stats(current_user: User = Depends(get_current_user), db: Sessio
             PlanningApplication.status,
             func.count(PlanningApplication.id),
         )
+        .filter(PlanningApplication.is_clone.is_(False))
         .group_by(PlanningApplication.status)
         .order_by(func.count(PlanningApplication.id).desc())
         .all()
@@ -218,6 +230,7 @@ def application_stats(current_user: User = Depends(get_current_user), db: Sessio
             func.count(PlanningApplication.id),
         )
         .join(PlanningApplication, PlanningApplication.council_id == Council.id)
+        .filter(PlanningApplication.is_clone.is_(False))
         .group_by(Council.id, Council.name)
         .order_by(func.count(PlanningApplication.id).desc())
         .limit(20)

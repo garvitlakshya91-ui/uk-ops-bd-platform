@@ -96,12 +96,20 @@ def main() -> None:
         raise SystemExit(f"Council {args.city!r} not found")
 
     rows = db.execute(sqltext("""
-        SELECT DISTINCT ON (sr.scheme_id) sr.scheme_id, es.name, sr.source_reference
-        FROM scheme_rents sr
-        JOIN existing_schemes es ON es.id = sr.scheme_id
-        WHERE es.council_id = :cid AND sr.is_current
-          AND sr.source_reference LIKE 'http%%'
-        ORDER BY sr.scheme_id, sr.scraped_at DESC
+        SELECT DISTINCT ON (x.scheme_id) x.scheme_id, es.name, x.source_reference
+        FROM (
+            SELECT scheme_id, source_reference, captured_at FROM scheme_room_rents
+            WHERE is_current AND source_reference LIKE 'http%%'
+            UNION ALL
+            SELECT scheme_id, source_reference, captured_at FROM scheme_advertised_rents
+            WHERE is_current AND source_reference LIKE 'http%%'
+            UNION ALL
+            SELECT scheme_id, source_reference, last_seen FROM scheme_source_records
+            WHERE status = 'matched' AND source IN ('operator_page', 'listing_page')
+              AND source_reference LIKE 'http%%'
+        ) x JOIN existing_schemes es ON es.id = x.scheme_id
+        WHERE es.council_id = :cid AND es.scheme_type = 'PBSA'
+        ORDER BY x.scheme_id, x.captured_at DESC
         LIMIT :lim
     """), {"cid": council.id, "lim": args.limit}).fetchall()
     print(f"{args.city}: checking {len(rows)} schemes with listing URLs")

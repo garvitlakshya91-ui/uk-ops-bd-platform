@@ -19,6 +19,7 @@ from app.models.models import Company, Council, ExistingScheme, PlanningApplicat
 from app.census_sources import published_value
 from app.scrapers.scheme_matching import name_score, norm_name, norm_pc
 from report.demand import affordability, balance_scenarios, gather_demand_context
+from report.evidence import gather_evidence
 from report.finance import gather_finance_context
 
 APPROVED_RE = re.compile(r"approv|permit|grant|consent", re.I)
@@ -47,14 +48,9 @@ STATUS_LABELS = {
     "child": "Child application (conditions, amendments, listed building)",
     "refused": "Refused", "withdrawn": "Withdrawn",
 }
-# Entry-price and range labels from directory feeds: not room tiers.
-TIER_ROOM_TYPES_EXCLUDED = ("From (advertised)", "To (advertised)", "Range", "From", "To",
-                            "Advertised", "Various", "General")
-# Rent feeds that describe the wider housing market, not student rooms
-# (ONS area averages, social rents, Rightmove lets attached for BD context).
-NON_STUDENT_RENT_SOURCES = ("ons_pipr_area", "rsh_sdr_la", "rightmove")
-INCENTIVE_CASH_RE = re.compile(r"£\s?([\d,]{2,6})(?!\s*(?:/|per|a)\s*(?:week|wk|pw))", re.I)
-INCENTIVE_WEEKLY_RE = re.compile(r"£\s?(\d{1,3})\s*(?:off\s+)?(?:a|per|/)\s*(?:week|wk)|£\s?(\d{1,3})\s*(?:pw|p/w)\s*off", re.I)
+# Rents come from their own tables since revision 020: listing entry
+# prices (scheme_advertised_rents), room tiers (scheme_room_rents), typed
+# offers (scheme_incentives); area averages never touch scheme figures.
 
 
 def _beds(s: ExistingScheme) -> int:
@@ -172,17 +168,22 @@ def gather_city_context(db: Session, council_name: str,
         for s in unis
     ), key=lambda r: -r["beds"])
 
-    # Cheapest current advertised rent per scheme (append-only rows)
+    # Cheapest current price per scheme: a listing's "from" price or the
+    # lowest room tier, whichever is lower (both tables are append-only).
     rent_rows = db.execute(text("""
-        SELECT scheme_id, MIN(rent_per_week) FROM scheme_rents
-        WHERE is_current AND rent_per_week BETWEEN 60 AND 700
-          AND scheme_id = ANY(:sids) AND source <> ALL(:nonstudent)
+        SELECT scheme_id, MIN(rent_ppw) FROM (
+            SELECT scheme_id, rent_ppw FROM scheme_advertised_rents WHERE is_current AND kind = 'from'
+            UNION ALL
+            SELECT scheme_id, rent_ppw FROM scheme_room_rents WHERE is_current AND source <> 'rightmove'
+        ) r
+        WHERE rent_ppw BETWEEN 60 AND 700 AND scheme_id = ANY(:sids)
         GROUP BY scheme_id
-    """), {"sids": census_scheme_ids, "nonstudent": list(NON_STUDENT_RENT_SOURCES)}).fetchall()
+    """), {"sids": census_scheme_ids}).fetchall()
     min_rent = {r[0]: r[1] for r in rent_rows}
 
     census = sorted((
         {
+            "id": s.id,
             "name": s.name,
             "operator": _operator_of(s),
             "postcode": s.postcode,
@@ -257,6 +258,7 @@ def gather_city_context(db: Session, council_name: str,
     apps = (
         db.query(PlanningApplication)
         .filter(PlanningApplication.council_id == council.id,
+                PlanningApplication.is_clone.is_(False),
                 or_(PlanningApplication.is_pbsa.is_(True),
                     PlanningApplication.scheme_type == "PBSA"))
         .all()
@@ -411,9 +413,7 @@ def gather_city_context(db: Session, council_name: str,
             approved, identified,
             model_growth=demand.get("cagr"),
         )
-        afford = affordability(db, census_scheme_ids, demand["max_loan"],
-                               excluded=TIER_ROOM_TYPES_EXCLUDED,
-                               nonstudent=NON_STUDENT_RENT_SOURCES)
+        afford = affordability(db, census_scheme_ids, demand["max_loan"])
         # Two distinct measures, never both "beds per student":
         #   provision_rate  = beds / all FT students   (BONARD's definition)
         #   coverage        = beds / estimated rental demand pool (ours, derived)
@@ -456,32 +456,28 @@ def gather_city_context(db: Session, council_name: str,
          "q1": round(float(r[3])), "median": round(float(r[4])), "q3": round(float(r[5]))}
         for r in db.execute(text("""
             SELECT sr.room_type, COUNT(*), COUNT(DISTINCT sr.scheme_id),
-                   percentile_cont(0.25) WITHIN GROUP (ORDER BY sr.rent_per_week),
-                   percentile_cont(0.5)  WITHIN GROUP (ORDER BY sr.rent_per_week),
-                   percentile_cont(0.75) WITHIN GROUP (ORDER BY sr.rent_per_week)
-            FROM scheme_rents sr
+                   percentile_cont(0.25) WITHIN GROUP (ORDER BY sr.rent_ppw),
+                   percentile_cont(0.5)  WITHIN GROUP (ORDER BY sr.rent_ppw),
+                   percentile_cont(0.75) WITHIN GROUP (ORDER BY sr.rent_ppw)
+            FROM scheme_room_rents sr
             WHERE sr.scheme_id = ANY(:sids) AND sr.is_current AND sr.source = 'operator_page'
-              AND sr.rent_per_week BETWEEN 60 AND 500 AND sr.room_type IS NOT NULL
+              AND sr.rent_ppw BETWEEN 60 AND 500
             GROUP BY sr.room_type HAVING COUNT(*) >= 3 ORDER BY COUNT(*) DESC
         """), {"sids": census_scheme_ids}).fetchall()
     ]
 
     # ---------------------------------------------------- rent headline
-    # The headline is the median of advertised room-tier observations, not
-    # of scheme "from" prices: a from-price is each scheme's cheapest tier
-    # and pulls any pooled median down.
+    # The headline is the median of room-tier observations (scheme_room_rents),
+    # never of listing "from" prices: a from-price is each scheme's cheapest
+    # tier and pulls any pooled median down. Rightmove rows are BTR lets.
     hl = db.execute(text("""
         SELECT COUNT(*), COUNT(DISTINCT sr.scheme_id),
-               percentile_cont(0.5) WITHIN GROUP (ORDER BY sr.rent_per_week),
-               MIN(COALESCE(sr.scraped_at, sr.created_at))::date,
-               MAX(COALESCE(sr.scraped_at, sr.created_at))::date
-        FROM scheme_rents sr
-        WHERE sr.scheme_id = ANY(:sids) AND sr.is_current AND sr.rent_per_week BETWEEN 60 AND 700
-          AND COALESCE(sr.scraped_at, sr.created_at) > now() - interval '365 days'
-          AND sr.room_type IS NOT NULL AND sr.room_type <> ALL(:excluded)
-          AND sr.source <> ALL(:nonstudent)
-    """), {"sids": census_scheme_ids, "excluded": list(TIER_ROOM_TYPES_EXCLUDED),
-           "nonstudent": list(NON_STUDENT_RENT_SOURCES)}).fetchone()
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY sr.rent_ppw),
+               MIN(sr.captured_at)::date, MAX(sr.captured_at)::date
+        FROM scheme_room_rents sr
+        WHERE sr.scheme_id = ANY(:sids) AND sr.is_current AND sr.rent_ppw BETWEEN 60 AND 700
+          AND sr.captured_at > now() - interval '365 days' AND sr.source <> 'rightmove'
+    """), {"sids": census_scheme_ids}).fetchone()
     rent_headline = None
     if hl and hl[0]:
         rent_headline = {"n": hl[0], "schemes": hl[1], "median": round(float(hl[2])),
@@ -490,43 +486,42 @@ def gather_city_context(db: Session, council_name: str,
     median_rent = rent_headline["median"] if rent_headline else None
 
     # -------------------------------------------- incentives, effective rent
-    # Advertised cash incentives netted off the scheme's tier median: the
-    # first step toward net effective rent (contract length and bills
-    # follow as the series builds).
+    # Typed incentives (scheme_incentives) netted off the scheme's tier
+    # median: the first step toward net effective rent (contract length
+    # and bills follow as the series builds).
     effective_rents = []
-    if _table_exists(db, "scheme_observations"):
+    if _table_exists(db, "scheme_incentives"):
         inc_rows = db.execute(text("""
             WITH tiers AS (
-              SELECT scheme_id, percentile_cont(0.5) WITHIN GROUP (ORDER BY rent_per_week) AS med,
+              SELECT scheme_id, percentile_cont(0.5) WITHIN GROUP (ORDER BY rent_ppw) AS med,
                      MAX(contract_length_weeks) AS weeks
-              FROM scheme_rents WHERE is_current AND rent_per_week BETWEEN 60 AND 700
-                AND room_type <> ALL(:excluded) AND source <> ALL(:nonstudent)
-                AND scheme_id = ANY(:sids) GROUP BY scheme_id),
-            inc AS (
-              SELECT DISTINCT ON (scheme_id, value_text) scheme_id, value_text, observed_at
-              FROM scheme_observations WHERE field = 'incentive' AND value_text IS NOT NULL
-              ORDER BY scheme_id, value_text, observed_at DESC)
-            SELECT es.name, inc.value_text, t.med, t.weeks
-            FROM inc JOIN existing_schemes es ON es.id = inc.scheme_id
-            JOIN tiers t ON t.scheme_id = inc.scheme_id
-            ORDER BY es.name
-        """), {"sids": census_scheme_ids, "excluded": list(TIER_ROOM_TYPES_EXCLUDED),
-               "nonstudent": list(NON_STUDENT_RENT_SOURCES)}).fetchall()
+              FROM scheme_room_rents WHERE is_current AND rent_ppw BETWEEN 60 AND 700
+                AND source <> 'rightmove' AND scheme_id = ANY(:sids) GROUP BY scheme_id)
+            SELECT es.name, i.raw_text, i.kind, i.amount, t.med, t.weeks
+            FROM scheme_incentives i JOIN existing_schemes es ON es.id = i.scheme_id
+            JOIN tiers t ON t.scheme_id = i.scheme_id
+            WHERE i.is_current ORDER BY es.name
+        """), {"sids": census_scheme_ids}).fetchall()
         by_scheme: dict[str, dict] = {}
-        for name, txt, med, weeks in inc_rows:
-            cash = sum(int(m.group(1).replace(",", "")) for m in INCENTIVE_CASH_RE.finditer(txt or "")
-                       if re.search(r"cash|voucher|rebate|credit|free", txt or "", re.I))
-            weekly = sum(int(m.group(1) or m.group(2)) for m in INCENTIVE_WEEKLY_RE.finditer(txt or ""))
+        for name, txt, kind, amount, med, weeks in inc_rows:
             e = by_scheme.setdefault(name, {"scheme": name, "tier_median": round(float(med)),
-                                            "weeks": int(weeks) if weeks else 51, "cash": 0,
-                                            "weekly_off": 0, "incentives": []})
-            # Offers are alternatives, not cumulative: take the largest.
-            e["cash"] = max(e["cash"], cash)
-            e["weekly_off"] = max(e["weekly_off"], weekly)
+                                            "weeks": int(weeks) if weeks else 51, "cash": 0.0,
+                                            "weekly_off": 0.0, "pct_off": 0.0, "incentives": []})
+            # Offers are alternatives, not cumulative: take the largest of each kind.
+            if amount is not None:
+                if kind == "cash":
+                    e["cash"] = max(e["cash"], float(amount))
+                elif kind == "weekly_off":
+                    e["weekly_off"] = max(e["weekly_off"], float(amount))
+                elif kind == "percent":
+                    e["pct_off"] = max(e["pct_off"], float(amount))
             e["incentives"].append(txt)
         for e in by_scheme.values():
-            if e["cash"] or e["weekly_off"]:
-                e["effective"] = round(e["tier_median"] - e["cash"] / e["weeks"] - e["weekly_off"])
+            if e["cash"] or e["weekly_off"] or e["pct_off"]:
+                effective = e["tier_median"] - e["cash"] / e["weeks"] - e["weekly_off"]
+                if e["pct_off"]:
+                    effective = min(effective, e["tier_median"] * (1 - e["pct_off"] / 100))
+                e["effective"] = round(effective)
                 e["discount_pct"] = round(100 * (1 - e["effective"] / e["tier_median"]), 1) if e["tier_median"] else None
                 e["incentives"] = "; ".join(e["incentives"])[:120]
                 effective_rents.append(e)
@@ -577,11 +572,19 @@ def gather_city_context(db: Session, council_name: str,
     for s in schemes:
         source_mix[s.source or "unknown"] += 1
 
+    # ----------------------------------------------------------- evidence
+    # Per-scheme sources and dates, benchmark reconciliation, and the
+    # flags the publish gates read. Built on the private census only.
+    evidence = gather_evidence(
+        db, council, candidates, apps, operators, publication,
+        council.name.lower().replace(" ", "-"))
+
     return {
         "city": council.name,
         "generated": datetime.date.today().isoformat(),
         "publication": publication,
         "coverage": coverage,
+        "evidence": evidence,
         "census": census,
         "kpis": {
             "pbsa_schemes": len(live),

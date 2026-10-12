@@ -595,6 +595,11 @@ def save_bpf_btr_schemes(
                     "operator_company_id": operator_id,
                     "council_id": council_id,
                 }
+                # The registry decides whether a feed may rename a building;
+                # a refused spelling is kept as an alias.
+                from app.registry.core import propose_name
+                if propose_name(db, existing, field_map.pop("name"), "bpf_btr") == "renamed":
+                    changed = True
                 for field, value in field_map.items():
                     if value is not None and value != getattr(existing, field, None):
                         setattr(existing, field, value)

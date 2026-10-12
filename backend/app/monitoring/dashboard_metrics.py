@@ -23,6 +23,7 @@ from app.models.models import (
     PlanningApplication,
     ScraperRun,
 )
+from app.registry.core import reportable_filters
 
 log = structlog.get_logger(__name__)
 
@@ -81,23 +82,33 @@ class MetricsCollector:
         week_start = self._start_of_week()
         month_start = self._start_of_month()
 
-        total_applications = self.db.query(func.count(PlanningApplication.id)).scalar() or 0
+        total_applications = (
+            self.db.query(func.count(PlanningApplication.id))
+            .filter(PlanningApplication.is_clone.is_(False))
+            .scalar()
+            or 0
+        )
         new_this_week = (
             self.db.query(func.count(PlanningApplication.id))
-            .filter(PlanningApplication.created_at >= week_start)
+            .filter(PlanningApplication.created_at >= week_start, PlanningApplication.is_clone.is_(False))
             .scalar()
             or 0
         )
         new_this_month = (
             self.db.query(func.count(PlanningApplication.id))
-            .filter(PlanningApplication.created_at >= month_start)
+            .filter(PlanningApplication.created_at >= month_start, PlanningApplication.is_clone.is_(False))
             .scalar()
             or 0
         )
 
         total_companies = self.db.query(func.count(Company.id)).scalar() or 0
         total_contacts = self.db.query(func.count(Contact.id)).scalar() or 0
-        total_schemes = self.db.query(func.count(ExistingScheme.id)).scalar() or 0
+        total_schemes = (
+            self.db.query(func.count(ExistingScheme.id))
+            .filter(*reportable_filters())
+            .scalar()
+            or 0
+        )
 
         six_months = now.date() + datetime.timedelta(days=182)
         contracts_expiring_6m = (
@@ -106,6 +117,7 @@ class MetricsCollector:
                 ExistingScheme.contract_end_date.isnot(None),
                 ExistingScheme.contract_end_date <= six_months,
                 ExistingScheme.contract_end_date >= now.date(),
+                *reportable_filters(),
             )
             .scalar()
             or 0
@@ -280,7 +292,7 @@ class MetricsCollector:
             )
             .outerjoin(
                 ExistingScheme,
-                ExistingScheme.council_id == Council.id,
+                and_(ExistingScheme.council_id == Council.id, *reportable_filters()),
             )
             .filter(Council.region.isnot(None))
             .group_by(Council.region)
@@ -311,7 +323,7 @@ class MetricsCollector:
                 func.date(PlanningApplication.created_at).label("day"),
                 func.count(PlanningApplication.id).label("count"),
             )
-            .filter(PlanningApplication.created_at >= cutoff)
+            .filter(PlanningApplication.created_at >= cutoff, PlanningApplication.is_clone.is_(False))
             .group_by(func.date(PlanningApplication.created_at))
             .order_by(func.date(PlanningApplication.created_at))
             .all()
@@ -409,7 +421,7 @@ class MetricsCollector:
                     {
                         "scheme_name": scheme.name,
                         "scheme_type": scheme.scheme_type,
-                        "scheme_num_units": scheme.num_units,
+                        "scheme_num_units": scheme.unit_count,
                         "contract_end_date": str(scheme.contract_end_date)
                         if scheme.contract_end_date
                         else None,
@@ -435,6 +447,7 @@ class MetricsCollector:
                 ExistingScheme.contract_end_date.isnot(None),
                 ExistingScheme.contract_end_date >= today,
                 ExistingScheme.contract_end_date <= end_date,
+                *reportable_filters(),
             )
             .order_by(ExistingScheme.contract_end_date)
             .all()
@@ -448,7 +461,7 @@ class MetricsCollector:
                 "scheme_id": scheme.id,
                 "name": scheme.name,
                 "scheme_type": scheme.scheme_type,
-                "num_units": scheme.num_units,
+                "num_units": scheme.unit_count,
                 "contract_end_date": str(scheme.contract_end_date),
                 "operator": None,
                 "owner": None,

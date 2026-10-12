@@ -90,7 +90,7 @@ def main():
                          source, source_reference, notes,
                          created_at, updated_at, locked_fields)
                     VALUES
-                        (:n, :a, :pc, :cid, 'PBSA', 'Operational',
+                        (:n, :a, :pc, :cid, 'PBSA', 'operational',
                          :u, :u, :op,
                          'sturents', :ref, :notes,
                          NOW(), NOW(), '{}'::jsonb)

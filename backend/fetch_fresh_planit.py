@@ -222,12 +222,14 @@ def save_planit_record(db, rec: dict, council_lookup: dict[str, int]) -> tuple[b
         except (ValueError, TypeError):
             pass
 
+    from app.scrapers.base import BaseScraper
+    from app.scrapers.planit_scraper import planit_party_names
+
     description = rec.get("description") or ""
-    applicant_name = rec.get("applicant_name") or ""
-    agent_name = rec.get("agent_name") or ""
+    applicant_name, agent_name = planit_party_names(rec)
+    postcode = rec.get("postcode") or BaseScraper.extract_postcode(rec.get("address"))
 
     # Use the broadened classifier
-    from app.scrapers.base import BaseScraper
     scheme_type = BaseScraper.classify_scheme_type(
         description, applicant_name=applicant_name, agent_name=agent_name
     )
@@ -237,12 +239,13 @@ def save_planit_record(db, rec: dict, council_lookup: dict[str, int]) -> tuple[b
     db.execute(
         text("""
             INSERT INTO planning_applications
-                (reference, council_id, address, description, applicant_name,
-                 agent_name, application_type, status, scheme_type, num_units,
+                (reference, council_id, address, postcode, description,
+                 applicant_name, agent_name, application_type, status,
+                 scheme_type, num_units,
                  latitude, longitude, submission_date, source, raw_data,
                  created_at, updated_at)
             VALUES
-                (:ref, :cid, :addr, :desc, :app, :agent, :atype, :status,
+                (:ref, :cid, :addr, :pc, :desc, :app, :agent, :atype, :status,
                  :stype, :units, :lat, :lon, :sdate, :source,
                  CAST(:raw AS jsonb), :now, :now)
         """),
@@ -250,6 +253,7 @@ def save_planit_record(db, rec: dict, council_lookup: dict[str, int]) -> tuple[b
             "ref": uid,
             "cid": council_id,
             "addr": rec.get("address"),
+            "pc": postcode or None,
             "desc": description,
             "app": applicant_name or None,
             "agent": agent_name or None,

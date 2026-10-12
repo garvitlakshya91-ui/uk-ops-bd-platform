@@ -37,6 +37,10 @@ logger = structlog.get_logger(__name__)
 
 SOURCE_PRECEDENCE: dict[str, int] = {
     "manual": 100,
+    # Registry verification and the reconciled census name a building; a
+    # feed's spelling becomes an alias instead of a rename.
+    "registry": 90,
+    "census": 85,
     "hmlr_ccod": 80,
     "companies_house": 80,
     # Licensed market-research packs (Student Source etc.): human-verified
@@ -51,8 +55,15 @@ SOURCE_PRECEDENCE: dict[str, int] = {
     "find_a_tender": 40,
     "contracts_finder": 40,
     "rsh": 35,
+    # A model answer checked against the page it cited.
+    "web_search": 30,
     "ai_enrichment": 20,
     "ai_enrichment_batch": 20,
+    # Operators assumed by a rule, not stated by a source: any feed outranks them.
+    "rule:brand_in_name": 15,
+    "rule:brand_owner": 15,
+    "rule:postcode_neighbour": 12,
+    "rule:self_managed": 12,
     "regex_extract": 10,
     "unknown": 10,
 }
@@ -71,6 +82,7 @@ def precedence_of(source: str | None) -> int:
 # ---------------------------------------------------------------------------
 
 PROTECTED_FIELDS: set[str] = {
+    "name",
     "num_units",
     "operator_company_id",
     "owner_company_id",
@@ -85,7 +97,6 @@ PROTECTED_FIELDS: set[str] = {
 # not listed here is rejected as an unknown write to avoid accidental schema
 # drift.
 WRITABLE_FIELDS: set[str] = PROTECTED_FIELDS | {
-    "name",
     "address",
     "postcode",
     "scheme_type",
@@ -101,7 +112,10 @@ WRITABLE_FIELDS: set[str] = PROTECTED_FIELDS | {
     "operating_status",
 }
 
-_SCHEME_TYPE_ENUM = {"BTR", "PBSA", "Co-living", "Senior Living", "Residential", "Mixed-use"}
+# The spellings the API filters and the scorer use. Older spellings are
+# accepted on input and stored canonically.
+_SCHEME_TYPE_ENUM = {"BTR", "PBSA", "Co-living", "Senior", "Residential", "Mixed", "Affordable"}
+_SCHEME_TYPE_ALIASES = {"Senior Living": "Senior", "Mixed-use": "Mixed", "Mixed Use": "Mixed"}
 _STATUS_ENUM = {"operational", "under_construction", "planned", "decommissioned"}
 _POSTCODE_RE = re.compile(r"^[A-Z]{1,2}\d[A-Z\d]?\s\d[A-Z]{2}$")
 
@@ -137,6 +151,7 @@ def _validate(field: str, value: Any) -> Any:
         return pc
 
     if field == "scheme_type":
+        value = _SCHEME_TYPE_ALIASES.get(value, value)
         if value not in _SCHEME_TYPE_ENUM:
             raise FieldValidationError(
                 f"scheme_type must be one of {_SCHEME_TYPE_ENUM}, got {value!r}"
@@ -144,6 +159,7 @@ def _validate(field: str, value: Any) -> Any:
         return value
 
     if field == "status":
+        value = str(value).strip().lower().replace(" ", "_")
         if value not in _STATUS_ENUM:
             raise FieldValidationError(
                 f"status must be one of {_STATUS_ENUM}, got {value!r}"
@@ -295,9 +311,11 @@ def compute_data_confidence(scheme: ExistingScheme) -> float:
     """
     locks = scheme.locked_fields or {}
     score = 0.0
-    per_field = 1.0 / len(PROTECTED_FIELDS)
+    # Every scheme has a name; counting it would shift every score.
+    scored = PROTECTED_FIELDS - {"name"}
+    per_field = 1.0 / len(scored)
 
-    for field in PROTECTED_FIELDS:
+    for field in scored:
         value = getattr(scheme, field, None)
         if value is None:
             continue

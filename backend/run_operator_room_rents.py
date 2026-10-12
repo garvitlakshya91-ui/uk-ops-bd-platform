@@ -104,31 +104,43 @@ def main():
     if not rows:
         print("nothing to save")
         return
+    # A "Range" record is the operator's entry price (scheme_advertised_rents);
+    # everything else is a priced room tier (scheme_room_rents).
+    tiers = [r for r in rows if r["rt"] != "Range"]
+    ranges = [r for r in rows if r["rt"] == "Range"]
     with engine.begin() as c:
-        existing = c.execute(text(
-            "SELECT COUNT(*) FROM scheme_rents WHERE source = :s AND is_current"),
-            {"s": source}).scalar()
+        existing = c.execute(text("""
+            SELECT (SELECT COUNT(*) FROM scheme_room_rents WHERE source = :s AND is_current)
+                 + (SELECT COUNT(*) FROM scheme_advertised_rents WHERE source = :s AND is_current)
+        """), {"s": source}).scalar()
         if existing and len(rows) < existing * 0.5:
             print(f"ABORT: new scrape ({len(rows)} rows) is <50% of current "
                   f"({existing}) — parser likely degraded; not replacing.")
             return
         # Append-only: supersede only the schemes we re-scraped; prior
         # observations stay as history, untouched schemes stay current.
-        c.execute(text("""
-            UPDATE scheme_rents SET is_current = FALSE, superseded_at = NOW()
-            WHERE is_current AND source = :s AND scheme_id = ANY(:sids)
-        """), {"s": source, "sids": list({r["sid"] for r in rows})})
-        for r in rows:
+        sids = list({r["sid"] for r in rows})
+        for table in ("scheme_room_rents", "scheme_advertised_rents"):
+            c.execute(text(f"""
+                UPDATE {table} SET is_current = FALSE, superseded_at = NOW()
+                WHERE is_current AND source = :s AND scheme_id = ANY(:sids)
+            """), {"s": source, "sids": sids})
+        for r in tiers:
             c.execute(text("""
-                INSERT INTO scheme_rents
-                    (scheme_id, room_type, rent_per_week, rent_per_month,
-                     currency, academic_year, contract_length_weeks,
-                     source, source_reference, scraped_at, created_at)
-                VALUES (:sid, :rt, :ppw, :pm, 'GBP', :ay, :wk,
-                        :src, :ref, NOW(), NOW())
+                INSERT INTO scheme_room_rents
+                    (scheme_id, room_type, rent_ppw, rent_pcm, currency, academic_year,
+                     contract_length_weeks, source, source_reference, captured_at)
+                VALUES (:sid, :rt, :ppw, :pm, 'GBP', :ay, :wk, :src, :ref, NOW())
             """), r)
-    print(f"saved {len(rows):,} rent rows "
-          f"({len({r['sid'] for r in rows}):,} schemes) as {source}")
+        for r in ranges:
+            c.execute(text("""
+                INSERT INTO scheme_advertised_rents
+                    (scheme_id, kind, rent_ppw, rent_pcm, currency, academic_year,
+                     contract_length_weeks, source, source_reference, captured_at)
+                VALUES (:sid, 'from', :ppw, :pm, 'GBP', :ay, :wk, :src, :ref, NOW())
+            """), r)
+    print(f"saved {len(tiers):,} room-tier rows and {len(ranges):,} entry prices "
+          f"({len(sids):,} schemes) as {source}")
 
 
 if __name__ == "__main__":

@@ -774,18 +774,18 @@ def apply_ai_suggestions(
     # Also persist any rent suggestions the user accepted (via body.rents)
     rents_saved = 0
     if getattr(body, "rents", None):
-        from app.models.rent_history import record_rent
+        from app.models.rents import record_room_rent
         for r in body.rents:
             # Append-only upsert: supersedes the prior ai_enrichment row
             # for this tier instead of overwriting it (or any scraped row).
-            outcome = record_rent(
+            outcome = record_room_rent(
                 db,
                 scheme_id=scheme_id,
                 source="ai_enrichment",
                 room_type=r.room_type,
                 academic_year=r.academic_year,
-                rent_per_week=r.rent_per_week,
-                rent_per_month=r.rent_per_month,
+                rent_ppw=r.rent_per_week,
+                rent_pcm=r.rent_per_month,
                 currency=r.currency or "GBP",
                 contract_length_weeks=r.contract_length_weeks,
             )

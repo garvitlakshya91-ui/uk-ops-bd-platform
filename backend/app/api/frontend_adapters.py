@@ -21,7 +21,8 @@ from app.models.models import (
     PipelineOpportunity,
     ExistingScheme,
     SchemeContract,
-    SchemeRent,
+    SchemeRoomRent,
+    SchemeAdvertisedRent,
     Alert,
     Council,
     Company,
@@ -31,8 +32,20 @@ from app.models.models import (
 from app.api.auth import get_current_user, require_role
 from app.models.user import User
 from app.api.permissions import get_allowed_alert_types
+from app.registry.core import reportable_filters
 
 router = APIRouter(prefix="/api", tags=["Frontend Adapters"])
+
+# Current prices across the two rent tables (revision 020): room tiers and
+# listing entry prices as one (sid, ppw, rid) relation for summaries.
+from sqlalchemy import select as sa_select, union_all as sa_union_all  # noqa: E402
+
+_current_prices = sa_union_all(
+    sa_select(SchemeRoomRent.scheme_id.label("sid"), SchemeRoomRent.rent_ppw.label("ppw"),
+              SchemeRoomRent.id.label("rid")).where(SchemeRoomRent.is_current.is_(True)),
+    sa_select(SchemeAdvertisedRent.scheme_id.label("sid"), SchemeAdvertisedRent.rent_ppw.label("ppw"),
+              (SchemeAdvertisedRent.id + 10_000_000).label("rid")).where(SchemeAdvertisedRent.is_current.is_(True)),
+).subquery("current_prices")
 
 # ---------------------------------------------------------------------------
 # Priority mapping: backend -> frontend
@@ -64,10 +77,14 @@ def dashboard_stats_adapted(current_user: User = Depends(get_current_user), db: 
     six_months = today + datetime.timedelta(days=182)
 
     total_applications = (
-        db.query(func.count(PlanningApplication.id)).scalar() or 0
+        db.query(func.count(PlanningApplication.id))
+        .filter(PlanningApplication.is_clone.is_(False))
+        .scalar()
+        or 0
     )
     new_this_week = (
         db.query(func.count(PlanningApplication.id))
+        .filter(PlanningApplication.is_clone.is_(False))
         .filter(
             (PlanningApplication.submission_date >= week_ago)
             | (
@@ -88,6 +105,7 @@ def dashboard_stats_adapted(current_user: User = Depends(get_current_user), db: 
                 ExistingScheme.contract_end_date.isnot(None),
                 ExistingScheme.contract_end_date >= today,
                 ExistingScheme.contract_end_date <= six_months,
+                *reportable_filters(),
             )
         )
         .scalar()
@@ -149,6 +167,7 @@ def dashboard_data_quality(
     bd_filter = and_(
         ExistingScheme.scheme_type.in_(_BD_SCHEME_TYPES),
         ExistingScheme.source.in_(_BD_SOURCES),
+        *reportable_filters(),
     )
 
     def _bd_count(*filters):
@@ -158,7 +177,9 @@ def dashboard_data_quality(
         return q.scalar() or 0
 
     bd_total = _bd_count()
-    total_schemes = db.query(func.count(ExistingScheme.id)).scalar() or 0
+    total_schemes = (
+        db.query(func.count(ExistingScheme.id)).filter(*reportable_filters()).scalar() or 0
+    )
 
     def _field_stat(field_label: str, field_name: str, filled_filter) -> DataQualityFieldStat:
         filled = _bd_count(filled_filter)
@@ -237,6 +258,7 @@ def dashboard_trends(
             func.count(PlanningApplication.id),
         )
         .filter(cast(PlanningApplication.created_at, SADate) >= start_date)
+        .filter(PlanningApplication.is_clone.is_(False))
         .group_by(cast(PlanningApplication.created_at, SADate))
         .all()
     )
@@ -319,7 +341,7 @@ def dashboard_top_opportunities(current_user: User = Depends(get_current_user), 
         elif opp.scheme:
             s = opp.scheme
             council_name = s.council.name if s.council else None
-            units = s.num_units
+            units = s.unit_count
             scheme_type = s.scheme_type
 
         result.append(
@@ -384,6 +406,7 @@ def list_application_councils(current_user: User = Depends(get_current_user), db
     results = (
         db.query(Council.name)
         .join(PlanningApplication, PlanningApplication.council_id == Council.id)
+        .filter(PlanningApplication.is_clone.is_(False))
         .distinct()
         .order_by(Council.name)
         .all()
@@ -400,6 +423,7 @@ def list_scheme_councils(current_user: User = Depends(get_current_user), db: Ses
     results = (
         db.query(Council.id, Council.name)
         .join(ExistingScheme, ExistingScheme.council_id == Council.id)
+        .filter(ExistingScheme.merged_into_id.is_(None))
         .distinct()
         .order_by(Council.name)
         .all()
@@ -458,6 +482,7 @@ def list_applications_flat(
 
     query = (
         db.query(PlanningApplication)
+        .filter(PlanningApplication.is_clone.is_(False))
         .options(
             joinedload(PlanningApplication.council),
             joinedload(PlanningApplication.pipeline_opportunity),
@@ -760,7 +785,7 @@ def list_pipeline_flat(
         elif opp.scheme:
             s = opp.scheme
             council_name = s.council.name if s.council else None
-            units = s.num_units
+            units = s.unit_count
             scheme_type = s.scheme_type
 
         # Primary contact from the company
@@ -838,6 +863,7 @@ class SchemeFlat(BaseModel):
     bd_score: Optional[float] = None
     priority: Optional[str] = None
     scheme_type: Optional[str] = None
+    record_class: Optional[str] = None
     address: Optional[str] = None
     postcode: Optional[str] = None
     owner: Optional[str] = None
@@ -847,6 +873,7 @@ class SchemeFlat(BaseModel):
     regulatory_rating: Optional[str] = None
     financial_health: Optional[float] = None
     status: Optional[str] = None
+    completion_date: Optional[str] = None
     data_confidence: Optional[float] = None
     last_verified: Optional[str] = None
     occupancy_rate: Optional[float] = None
@@ -943,7 +970,7 @@ def _compute_score_breakdown(scheme: ExistingScheme, db: Session) -> ScoreBreakd
     relationship_strength = fin if fin is not None else 50.0
 
     # Scheme size
-    units = scheme.num_units or 0
+    units = scheme.unit_count or 0
     if units > 500:
         scheme_size = 100.0
     elif units > 200:
@@ -990,6 +1017,9 @@ def list_schemes_flat(
     search: Optional[str] = None,
     scheme_type: Optional[str] = None,
     source: Optional[str] = None,
+    record_class: Optional[str] = Query(
+        None, description="scheme, development_cluster, procurement_notice, listing_fragment, "
+                          "ingest_artefact, or all. Default: schemes and clusters."),
     council_id: Optional[int] = None,
     region: Optional[str] = Query(None, description="Filter by council region"),
     sort_by: Optional[str] = Query(None, description="Sort field: name, units, scheme_type, postcode, council, owner, operator, min_rent"),
@@ -1028,6 +1058,16 @@ def list_schemes_flat(
         )
     )
 
+    # Retired duplicates never list. Artefacts, procurement notices and
+    # listing fragments list only when asked for by class (or by id).
+    from app.registry.core import listable_filters
+    if not scheme_ids:
+        if record_class in (None, ""):
+            query = query.filter(*listable_filters())
+        else:
+            query = query.filter(ExistingScheme.merged_into_id.is_(None))
+            if record_class != "all":
+                query = query.filter(ExistingScheme.record_class == record_class)
     if scheme_type is not None:
         query = query.filter(ExistingScheme.scheme_type == scheme_type)
     if source is not None:
@@ -1073,9 +1113,9 @@ def list_schemes_flat(
         query = query.filter(ExistingScheme.operator_company_id.is_(None))
 
     if min_units is not None:
-        query = query.filter(ExistingScheme.num_units >= min_units)
+        query = query.filter(ExistingScheme.unit_count >= min_units)
     if max_units is not None:
-        query = query.filter(ExistingScheme.num_units <= max_units)
+        query = query.filter(ExistingScheme.unit_count <= max_units)
     if min_arrears is not None:
         # Filter to schemes with arrears risk at or above the threshold.
         # NULL arrears are excluded (we can't claim distress on un-scored rows).
@@ -1084,15 +1124,15 @@ def list_schemes_flat(
         query = query.filter(ExistingScheme.id.in_(scheme_ids))
 
     # Per-scheme rent summary (min + count) as a subquery we can reuse
-    # for filtering, sorting, and response population.
+    # for filtering, sorting, and response population. Prices live in
+    # two tables since revision 020: room tiers and listing entry prices.
     rent_summary = (
         db.query(
-            SchemeRent.scheme_id.label("sid"),
-            sa_func.min(SchemeRent.rent_per_week).label("min_rent_wk"),
-            sa_func.count(SchemeRent.id).label("rent_count"),
+            _current_prices.c.sid,
+            sa_func.min(_current_prices.c.ppw).label("min_rent_wk"),
+            sa_func.count(_current_prices.c.rid).label("rent_count"),
         )
-        .filter(SchemeRent.is_current.is_(True))
-        .group_by(SchemeRent.scheme_id)
+        .group_by(_current_prices.c.sid)
         .subquery()
     )
 
@@ -1124,7 +1164,7 @@ def list_schemes_flat(
 
     sort_column = ExistingScheme.name  # default
     if sort_by == "units":
-        sort_column = ExistingScheme.num_units
+        sort_column = ExistingScheme.unit_count
     elif sort_by == "scheme_type":
         sort_column = ExistingScheme.scheme_type
     elif sort_by == "postcode":
@@ -1163,15 +1203,12 @@ def list_schemes_flat(
         scheme_ids = [s.id for s in items]
         rent_rows = (
             db.query(
-                SchemeRent.scheme_id,
-                sa_func.min(SchemeRent.rent_per_week),
-                sa_func.count(SchemeRent.id),
+                _current_prices.c.sid,
+                sa_func.min(_current_prices.c.ppw),
+                sa_func.count(_current_prices.c.rid),
             )
-            .filter(
-                SchemeRent.scheme_id.in_(scheme_ids),
-                SchemeRent.is_current.is_(True),
-            )
-            .group_by(SchemeRent.scheme_id)
+            .filter(_current_prices.c.sid.in_(scheme_ids))
+            .group_by(_current_prices.c.sid)
             .all()
         )
         rent_by_scheme = {sid: (mn, cnt) for sid, mn, cnt in rent_rows}
@@ -1214,13 +1251,14 @@ def list_schemes_flat(
                 ),
                 council=scheme.council.name if scheme.council else None,
                 region=scheme.council.region if scheme.council else None,
-                units=scheme.num_units,
+                units=scheme.unit_count,
                 contract_end=contract_end,
                 performance=scheme.performance_rating,
                 satisfaction=scheme.satisfaction_score,
                 bd_score=bd_score,
                 priority=priority,
                 scheme_type=scheme.scheme_type,
+                record_class=scheme.record_class,
                 address=scheme.address,
                 postcode=scheme.postcode,
                 owner=scheme.owner_company.name if scheme.owner_company else None,
@@ -1232,6 +1270,7 @@ def list_schemes_flat(
                 regulatory_rating=scheme.regulatory_rating,
                 financial_health=scheme.financial_health_score,
                 status=scheme.status if hasattr(scheme, 'status') else None,
+                completion_date=scheme.completion_date.isoformat() if scheme.completion_date else None,
                 data_confidence=scheme.data_confidence_score if hasattr(scheme, 'data_confidence_score') else None,
                 last_verified=str(scheme.last_verified_at) if hasattr(scheme, 'last_verified_at') and scheme.last_verified_at else None,
                 occupancy_rate=None,
@@ -1473,36 +1512,48 @@ def get_scheme_rents(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return a scheme's current rent tiers, cheapest first.
+    """Return a scheme's current room tiers and listing entry prices,
+    cheapest first.
 
     ``include_history=true`` also returns superseded observations,
     newest first within each tier — the raw rent time series."""
-    query = db.query(SchemeRent).filter(SchemeRent.scheme_id == scheme_id)
+    tiers = db.query(SchemeRoomRent).filter(SchemeRoomRent.scheme_id == scheme_id)
+    entry = db.query(SchemeAdvertisedRent).filter(SchemeAdvertisedRent.scheme_id == scheme_id)
     if not include_history:
-        query = query.filter(SchemeRent.is_current.is_(True))
-    rents = (
-        query.order_by(
-            SchemeRent.academic_year.desc().nullslast(),
-            SchemeRent.rent_per_week.asc().nullslast(),
-            SchemeRent.scraped_at.desc(),
-        )
-        .all()
-    )
-    return [
+        tiers = tiers.filter(SchemeRoomRent.is_current.is_(True))
+        entry = entry.filter(SchemeAdvertisedRent.is_current.is_(True))
+    rows = [
         SchemeRentFlat(
-            id=str(r.id),
-            room_type=r.room_type,
-            rent_per_week=r.rent_per_week,
-            rent_per_month=r.rent_per_month,
+            id=f"room-{r.id}",
+            room_type=r.room_type + (f" · {r.sub_classification}" if r.sub_classification else ""),
+            rent_per_week=r.rent_ppw,
+            rent_per_month=r.rent_pcm,
             currency=r.currency or "GBP",
             academic_year=r.academic_year,
             contract_length_weeks=r.contract_length_weeks,
             source=r.source,
-            scraped_at=r.scraped_at.isoformat() if r.scraped_at else None,
+            scraped_at=r.captured_at.isoformat() if r.captured_at else None,
             is_current=r.is_current,
         )
-        for r in rents
+        for r in tiers.all()
+    ] + [
+        SchemeRentFlat(
+            id=f"adv-{r.id}",
+            room_type=f"{r.kind} (advertised)",
+            rent_per_week=r.rent_ppw,
+            rent_per_month=r.rent_pcm,
+            currency=r.currency or "GBP",
+            academic_year=r.academic_year,
+            contract_length_weeks=r.contract_length_weeks,
+            source=r.source,
+            scraped_at=r.captured_at.isoformat() if r.captured_at else None,
+            is_current=r.is_current,
+        )
+        for r in entry.all()
     ]
+    rows.sort(key=lambda r: (r.academic_year or "", -(r.rent_per_week or 1e9), r.scraped_at or ""),
+              reverse=True)
+    return rows
 
 
 # =========================================================================
@@ -1554,6 +1605,7 @@ def get_scheme_competitors(
     conds = [
         ExistingScheme.scheme_type == scheme_type,
         ExistingScheme.operator_company_id.isnot(None),
+        *reportable_filters(),
     ]
     if own_operator_id:
         conds.append(ExistingScheme.operator_company_id != own_operator_id)
@@ -1567,7 +1619,7 @@ def get_scheme_competitors(
                 Company.id,
                 Company.name,
                 sa_func.count(ExistingScheme.id).label("cnt"),
-                sa_func.avg(ExistingScheme.num_units).label("avg_u"),
+                sa_func.avg(ExistingScheme.unit_count).label("avg_u"),
                 sa_func.min(ExistingScheme.id).label("sample_id"),
                 sa_func.min(ExistingScheme.name).label("sample_name"),
             )
@@ -1591,7 +1643,7 @@ def get_scheme_competitors(
     op_ids = [r[0] for r in rows]
     rent_op_ids = set(
         r[0] for r in db.query(ExistingScheme.operator_company_id)
-        .join(SchemeRent, SchemeRent.scheme_id == ExistingScheme.id)
+        .join(_current_prices, _current_prices.c.sid == ExistingScheme.id)
         .filter(ExistingScheme.operator_company_id.in_(op_ids))
         .distinct()
         .all()
@@ -2204,6 +2256,7 @@ def list_companies_adapted(
                 (PlanningApplication.applicant_company_id == company.id)
                 | (PlanningApplication.agent_company_id == company.id)
             )
+            .filter(PlanningApplication.is_clone.is_(False))
             .limit(20)
             .all()
         )
@@ -2238,7 +2291,7 @@ def list_companies_adapted(
                     LinkedSchemeFlat(
                         id=str(scheme.id),
                         name=scheme.name,
-                        units=scheme.num_units,
+                        units=scheme.unit_count,
                         scheme_type=scheme.scheme_type,
                     )
                 )

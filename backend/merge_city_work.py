@@ -15,11 +15,14 @@ What moves, per city (--cities):
                          other values are kept; unmatched schemes are inserted.
                          Target PBSA schemes the census does not contain are left
                          untouched (the report lists them as unreconciled).
-  scheme_rents           inserted against the mapped schemes, history preserved;
+  scheme_rents, scheme_advertised_rents, scheme_room_rents, scheme_incentives
+                         inserted against the mapped schemes, history preserved;
                          where the source has newer current rows from the same
                          feed, the target's older current rows are superseded.
   scheme_observations, scheme_room_types, scheme_availability, scheme_events,
   transactions           inserted against the mapped schemes (no duplicates).
+  area_rent_benchmarks   council-level: copied by (council, source, segment,
+                         period) when absent.
 Shared reference data:
   companies (operators the census uses), institutions, hesa_enrolments,
   hesa_term_time_accommodation, maintenance_loans, yield_benchmarks,
@@ -104,7 +107,9 @@ class Merger:
         self.label = label
         self.sm, self.tm = MetaData(), MetaData()
         names = ["councils", "companies", "existing_schemes", "planning_applications",
-                 "scheme_rents", "scheme_observations", "scheme_room_types",
+                 "scheme_rents", "scheme_advertised_rents", "scheme_room_rents",
+                 "scheme_incentives", "area_rent_benchmarks",
+                 "scheme_observations", "scheme_room_types",
                  "scheme_availability", "scheme_events", "transactions", "institutions",
                  "hesa_enrolments", "hesa_term_time_accommodation", "maintenance_loans",
                  "yield_benchmarks", "visa_issuances", "alembic_version"]
@@ -364,6 +369,16 @@ class Merger:
         self._insert_children(tc, "scheme_rents", src_rents,
                               ["scheme_id", "source", "room_type", "sub_classification",
                                "academic_year", "rent_per_week", "scraped_at"])
+        # the split rent tables (020): same rule, keyed on captured_at
+        for name, keys in (("scheme_advertised_rents", ["scheme_id", "source", "kind", "academic_year",
+                                                        "rent_ppw", "captured_at"]),
+                           ("scheme_room_rents", ["scheme_id", "source", "room_type", "sub_classification",
+                                                  "academic_year", "rent_ppw", "captured_at"]),
+                           ("scheme_incentives", ["scheme_id", "source", "raw_text", "captured_at"])):
+            st = self.s(name)
+            rows = sc.execute(select(st).where(st.c.scheme_id.in_(sids))).mappings().all()
+            self._supersede_older(tc, name, rows, now)
+            self._insert_children(tc, name, rows, keys)
         for name, keys in (("scheme_observations", ["scheme_id", "field", "source", "observed_at", "value_text"]),
                            ("scheme_room_types", ["scheme_id", "room_type", "sub_classification", "source", "observed_at"]),
                            ("scheme_availability", ["scheme_id", "captured_at", "state", "source", "source_reference"]),
@@ -383,6 +398,22 @@ class Merger:
                 tc.execute(ttt.insert().values(**vals))
                 self.stats["transactions"]["inserted"] += 1
 
+    def _supersede_older(self, tc, name: str, rows, now: datetime.datetime) -> None:
+        """Where the source has a newer current capture for (scheme, source),
+        the target's older current rows from that feed are superseded."""
+        tt = self.t(name)
+        newest: dict[tuple[int, str], datetime.datetime] = {}
+        for r in rows:
+            if r["is_current"] and r["captured_at"]:
+                k = (self.scheme_map[r["scheme_id"]], r["source"])
+                if k not in newest or r["captured_at"] > newest[k]:
+                    newest[k] = r["captured_at"]
+        for (tid, source), ts in newest.items():
+            res = tc.execute(tt.update().where(and_(
+                tt.c.scheme_id == tid, tt.c.source == source, tt.c.is_current.is_(True),
+                tt.c.captured_at < ts)).values(is_current=False, superseded_at=now))
+            self.stats[name]["target_superseded"] += res.rowcount or 0
+
     def _insert_children(self, tc, name: str, rows, keys: list[str]) -> None:
         tt = self.t(name)
         for r in rows:
@@ -395,6 +426,22 @@ class Merger:
                 self.stats[name]["inserted"] += 1
             else:
                 self.stats[name]["already_present"] += 1
+
+    # ------------------------------------------------------- area benchmarks
+    def merge_area_benchmarks(self, sc, tc) -> None:
+        """Council-level rent references: copied when the target has no row
+        for (council, source, segment, period)."""
+        sat, tat = self.s("area_rent_benchmarks"), self.t("area_rent_benchmarks")
+        for r in sc.execute(select(sat).where(sat.c.council_id.in_(self.src_city_ids))).mappings():
+            vals = common(dict(r), tat)
+            vals["council_id"] = self.council_map[r["council_id"]]
+            cond = and_(*[(tat.c[k] == vals[k]) if vals.get(k) is not None else tat.c[k].is_(None)
+                          for k in ("council_id", "source", "segment", "period")])
+            if tc.execute(select(tat.c.id).where(cond).limit(1)).first() is None:
+                tc.execute(tat.insert().values(**vals))
+                self.stats["area_rent_benchmarks"]["inserted"] += 1
+            else:
+                self.stats["area_rent_benchmarks"]["already_present"] += 1
 
     # ------------------------------------------------------ planning registry
     def merge_applications(self, sc, tc) -> None:
@@ -440,6 +487,7 @@ class Merger:
                 self.merge_reference(sc, tc)
                 self.merge_schemes(sc, tc)
                 self.merge_scheme_rows(sc, tc)
+                self.merge_area_benchmarks(sc, tc)
                 self.merge_applications(sc, tc)
                 # keep sequences ahead of any explicitly carried ids
                 for name in ("existing_schemes", "planning_applications", "companies"):

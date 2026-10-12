@@ -85,7 +85,8 @@ $alembic = (& $Psql @conn -d $DbName -tAc "SELECT CASE WHEN to_regclass('public.
 # Row counts of the tables that matter; tables absent on an older schema are skipped.
 $countSql = @"
 SELECT t || ',' || (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I', t), false, true, '')))[1]::text
-FROM unnest(ARRAY['planning_applications','existing_schemes','scheme_rents','scheme_contracts','scheme_observations',
+FROM unnest(ARRAY['planning_applications','existing_schemes','scheme_rents','scheme_advertised_rents','scheme_room_rents',
+                  'scheme_incentives','area_rent_benchmarks','scheme_contracts','scheme_observations',
                   'scheme_room_types','scheme_availability','scheme_events','transactions','companies','councils',
                   'institutions','hesa_enrolments','hesa_term_time_accommodation','maintenance_loans','yield_benchmarks',
                   'pipeline_opportunities','brownfield_sites','title_ownership','scraper_runs','alerts','users']) AS t

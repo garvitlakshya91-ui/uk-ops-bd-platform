@@ -9,7 +9,7 @@ Strategy:
   2. Call _call_claude with use_web_search=True.
   3. Apply high-confidence suggestions via set_field. Because we unlocked
      the lower-precedence fields, AI (rank 20) can now write them.
-  4. Persist rent suggestions into scheme_rents.
+  4. Persist rent suggestions into scheme_room_rents.
 
 Note: this uses --min-confidence 0.7 by default. The web-search-backed AI
 is grounded and generally returns 0.8-1.0 on correct findings, so 0.7 is
@@ -33,7 +33,7 @@ from app.models.models import (
     Company,
     ExistingScheme,
 )
-from app.models.rent_history import record_rent
+from app.models.rents import record_room_rent
 from app.api.ai_enrichment import (
     _call_claude,
     _build_suggestions,
@@ -166,14 +166,14 @@ def apply_ai_to_scheme(
             continue
         # Append-only upsert: supersedes the prior ai_enrichment row
         # for this tier instead of overwriting it.
-        outcome = record_rent(
+        outcome = record_room_rent(
             db,
             scheme_id=scheme.id,
             source="ai_enrichment",
             room_type=r.room_type,
             academic_year=r.academic_year,
-            rent_per_week=r.rent_per_week,
-            rent_per_month=r.rent_per_month,
+            rent_ppw=r.rent_per_week,
+            rent_pcm=r.rent_per_month,
             currency=r.currency or "GBP",
             contract_length_weeks=r.contract_length_weeks,
         )

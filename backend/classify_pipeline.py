@@ -39,8 +39,8 @@ from pathlib import Path
 from sqlalchemy import or_
 
 from app.database import SessionLocal
-from app.models.models import Company, Council, ExistingScheme, PlanningApplication
-from app.scrapers.pbsa_beds import parse_beds, parse_beds_max
+from app.extraction.units import UnitExtraction, as_rows, extract_units
+from app.models.models import Company, Council, ExistingScheme, PlanningApplication, UnitExtractionRecord
 from app.scrapers.scheme_matching import norm_name, norm_pc
 
 REF_RE = re.compile(r"\b(\d{4}/\d{4,5}/PA)\b", re.I)
@@ -150,6 +150,18 @@ def implements(consent: PlanningApplication, scheme: ExistingScheme) -> bool:
     return bool(beds and s_beds and 0.6 <= s_beds / beds <= 1.6)
 
 
+def record_extractions(db, entity_type: str, entity_id: int, ex: UnitExtraction, source: str) -> None:
+    """Replace the machine-read figures for an entity; AI and manual rows stay."""
+    (db.query(UnitExtractionRecord)
+     .filter(UnitExtractionRecord.entity_type == entity_type,
+             UnitExtractionRecord.entity_id == entity_id,
+             UnitExtractionRecord.source == source,
+             UnitExtractionRecord.method.notin_(("ai", "manual")))
+     .delete(synchronize_session=False))
+    for row in as_rows(ex, entity_type, entity_id, source):
+        db.add(UnitExtractionRecord(**row))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--city", required=True)
@@ -210,21 +222,38 @@ def main() -> None:
         else:
             a.parent_reference = None
 
+    # Bed counts come from the unit extractor with their confidence and the
+    # phrase they were read from. A count a model or a person set is never
+    # overridden by a re-read; a count of unknown origin that the text no
+    # longer supports is kept but flagged for review.
+    disputed: list[tuple] = []
     for a in apps:
         if a.permission_type in children:
             continue
-        desc = a.description or ""
-        if a.permission_type in ("outline", "hybrid"):
-            env = parse_beds_max(desc) or parse_beds(desc)
-            a.beds_max = env
-            if env:
-                a.pbsa_beds, a.beds_basis = env, "up_to"
-        elif a.pbsa_beds is None:
-            n = parse_beds(desc)
-            if n:
-                a.pbsa_beds, a.beds_basis = n, "stated"
-        elif not a.beds_basis:
-            a.beds_basis = "stated"
+        ex = extract_units(a.description or "")
+        committed, envelope = ex.best("beds"), ex.maximum("beds")
+        a.beds_max = envelope.value if envelope else None
+        fig = (envelope or committed) if a.permission_type in ("outline", "hybrid") else (committed or envelope)
+        prior = a.beds_extractor
+        if prior in ("ai", "manual", "document", "unknown") or a.beds_basis == "variation":
+            pass
+        elif fig is None:
+            if a.pbsa_beds is not None and prior is None:
+                a.beds_extractor = "unknown"
+                disputed.append((a.reference, a.pbsa_beds, None, "no figure in the description"))
+        elif a.pbsa_beds is not None and prior is None and a.pbsa_beds != fig.value:
+            a.beds_extractor = "unknown"
+            disputed.append((a.reference, a.pbsa_beds, fig.value, fig.quote))
+        else:
+            a.pbsa_beds = fig.value
+            a.beds_basis = ("up_to" if fig.is_maximum else "either_or" if fig.alternative
+                            else "additional" if fig.is_additional else "stated")
+            a.beds_confidence, a.beds_quote, a.beds_extractor = fig.confidence, fig.quote[:2000], "regex"
+        record_extractions(db, "planning_application", a.id, ex, "description")
+    if disputed:
+        print(f"\n{len(disputed)} stored bed counts the description does not support (kept, flagged 'unknown'):")
+        for ref, stored, found, quote in disputed:
+            print(f"  {ref:16s} stored {stored:>5}  extractor {str(found or '-'):>5}  {str(quote)[:70]}")
     # S73 / NMA that states a new total moves it to the parent
     for a in apps:
         if a.permission_type in ("s73_variation", "nma") and a.parent_reference in by_ref:

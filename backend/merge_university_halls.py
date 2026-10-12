@@ -109,7 +109,7 @@ def main():
                          operator_company_id, source, source_reference, notes,
                          created_at, updated_at, locked_fields)
                     VALUES
-                        (:n, :a, :pc, :cid, 'PBSA', 'Operational',
+                        (:n, :a, :pc, :cid, 'PBSA', 'operational',
                          :op, 'university_halls', :ref, :notes,
                          NOW(), NOW(), '{}'::jsonb)
                     RETURNING id

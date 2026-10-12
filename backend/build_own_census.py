@@ -35,9 +35,10 @@ from sqlalchemy import text
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.database import SessionLocal
+from app.extraction.units import extract_units
 from app.models.models import Company, Council, ExistingScheme, PlanningApplication
-from app.models.observations import record_observation
-from app.scrapers.pbsa_scraper import extract_bed_count
+from app.models.observations import CACHE_MIN_CONFIDENCE, record_observation
+from app.scrapers.pbsa_scraper import PAGE_BED_MIN_CONFIDENCE
 from app.scrapers.scheme_matching import best_match, build_index, norm_name, norm_pc
 from ai_room_rents import page_text
 
@@ -46,13 +47,33 @@ UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.3
 NOW = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
-def entry(value, source, ref=None, basis=None) -> dict:
+def entry(value, source, ref=None, basis=None, confidence=None, quote=None) -> dict:
     e = {"value": value, "source": source, "at": NOW}
     if ref:
         e["ref"] = ref
     if basis:
         e["basis"] = basis
+    if confidence is not None:
+        e["confidence"] = confidence
+    if quote:
+        e["quote"] = quote[:200]
     return e
+
+
+def fallback_source(s: ExistingScheme, field: str) -> str:
+    """Where a value we did not observe ourselves came from.
+
+    A scheme matched during the city-work merge carries census values
+    under its own record's feed label; those values are the licensed
+    pack's and must be labelled as such, never as the feed's.
+    """
+    prov = s.field_provenance or {}
+    existing = (prov.get(field) or {}).get("source")
+    if existing:
+        return existing
+    if "_merge" in prov or (s.source or "") == "benchmark_report":
+        return "benchmark_report"
+    return s.source or "benchmark_report"
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -104,11 +125,17 @@ def main() -> None:
     observed: dict[int, set[str]] = {s.id: set() for s in schemes}
     urls: dict[int, list[str]] = {s.id: [] for s in schemes}
     for sid, source, ref in db.execute(text("""
-        SELECT scheme_id, source, source_reference FROM scheme_rents
+        SELECT scheme_id, source, source_reference FROM scheme_room_rents
+        WHERE scheme_id = ANY(:ids)
+        UNION ALL
+        SELECT scheme_id, source, source_reference FROM scheme_advertised_rents
         WHERE scheme_id = ANY(:ids)
         UNION ALL
         SELECT scheme_id, source, source_reference FROM scheme_availability
         WHERE scheme_id = ANY(:ids)
+        UNION ALL
+        SELECT scheme_id, source, source_reference FROM scheme_source_records
+        WHERE scheme_id = ANY(:ids) AND status = 'matched' AND source_reference LIKE 'http%'
     """), {"ids": list(observed)}):
         observed[sid].add(source)
         if ref and ref.startswith("http") and ref not in urls[sid]:
@@ -136,14 +163,20 @@ def main() -> None:
             if rec.get("url") and rec["url"] not in urls[s.id]:
                 urls[s.id].append(rec["url"])
 
-    # ---- evidence 3: approved planning consents with parsed beds
+    # ---- evidence 3: the consent an operating scheme was built under
     # A whole-scheme consent, not an extension or change of use within one:
     # small bed counts at the same postcode are almost always later
-    # alterations, so they never stand in for the scheme's size.
+    # alterations, so they never stand in for the scheme's size. Only a
+    # consent the pipeline classifier marks completed may describe a live
+    # scheme: a permission still in the pipeline at the same postcode is a
+    # different building (Queens Hospital Close: 337 beds operating, 759
+    # consented next door).
     MIN_SCHEME_BEDS = 50
     consents = (db.query(PlanningApplication)
                 .filter(PlanningApplication.council_id == council.id,
-                        PlanningApplication.pbsa_beds >= MIN_SCHEME_BEDS).all())
+                        PlanningApplication.pbsa_beds >= MIN_SCHEME_BEDS,
+                        PlanningApplication.delivery_status == "completed",
+                        PlanningApplication.beds_basis.notin_(("additional", "up_to", "child"))).all())
 
     def consent_for(s: ExistingScheme):
         pc, tokens = norm_pc(s.postcode), norm_name(s.name)
@@ -172,7 +205,7 @@ def main() -> None:
             bench[(norm_pc(r.get("postcode")), frozenset(norm_name(r["property"])))] = r
 
     stats = {"schemes": len(schemes), "observed": 0, "operator": 0,
-             "beds_page": 0, "beds_planning": 0, "build_year": 0}
+             "beds_page": 0, "beds_low_confidence": 0, "beds_planning": 0, "build_year": 0}
     qa = []
     try:
         for s in schemes:
@@ -193,35 +226,54 @@ def main() -> None:
                         corroborated = entry(op_name, source)
                         break
             prov["operator"] = corroborated or (
-                entry(op_name, s.source or "benchmark_report") if op_name else None)
+                entry(op_name, fallback_source(s, "operator")) if op_name else None)
             if corroborated:
                 stats["operator"] += 1
 
             beds_entry = None
             kept = (s.field_provenance or {}).get("beds_total")
             if args.no_fetch and kept and kept.get("source") == "operator_page":
-                beds_entry = kept
-                stats["beds_page"] += 1
+                # A cached page reading stands only if its own quote still
+                # reads to the same number under the current extractor.
+                quote = kept.get("quote")
+                if quote and extract_units(quote).beds != kept.get("value"):
+                    print(f"  {s.name[:34]:34} dropping cached page count {kept.get('value')}: "
+                          f"quote {quote[:40]!r} no longer reads as a count")
+                else:
+                    beds_entry = kept
+                    stats["beds_page"] += 1
             if not args.no_fetch:
                 for url in urls[s.id][:3]:
                     txt = fetch_text(url, browser)
-                    n = extract_bed_count(txt)
-                    if n:
-                        beds_entry = entry(n, "operator_page", ref=url)
-                        stats["beds_page"] += 1
+                    fig = extract_units(txt).best("beds")
+                    # A firm statement ("827 study bedrooms") is evidence; a
+                    # round-up ("over 200 students") is recorded but not a count.
+                    if fig and fig.is_additional is False and 20 <= fig.value <= 5000:
+                        if fig.confidence >= PAGE_BED_MIN_CONFIDENCE:
+                            beds_entry = entry(fig.value, "operator_page", ref=url,
+                                               confidence=fig.confidence, quote=fig.quote)
+                            stats["beds_page"] += 1
+                        elif not args.dry_run_obs:
+                            record_observation(db, s, "beds_total", fig.value, "operator_page",
+                                               reference=url, confidence=fig.confidence, quote=fig.quote,
+                                               extractor="regex", refresh_cache=False)
+                            stats["beds_low_confidence"] += 1
                         break
             consent = consent_for(s)
             if beds_entry is None and consent is not None:
                 beds_entry = entry(consent.pbsa_beds, "planning_consent",
-                                   ref=consent.reference, basis="consented_beds")
+                                   ref=consent.reference, basis="consented_beds",
+                                   confidence=consent.beds_confidence, quote=consent.beds_quote)
                 stats["beds_planning"] += 1
             if beds_entry is None and s.beds_total:
-                beds_entry = entry(s.beds_total, s.source or "benchmark_report")
+                beds_entry = entry(s.beds_total, fallback_source(s, "beds_total"))
             prov["beds_total"] = beds_entry
             if beds_entry and beds_entry["source"] != "benchmark_report" and not args.dry_run_obs:
                 record_observation(db, s, "beds_total", beds_entry["value"],
                                    beds_entry["source"], reference=beds_entry.get("ref"),
-                                   basis="observed", refresh_cache=False)
+                                   basis="observed", refresh_cache=False,
+                                   confidence=beds_entry.get("confidence"), quote=beds_entry.get("quote"),
+                                   extractor="regex")
             if corroborated and not args.dry_run_obs:
                 record_observation(db, s, "operator", corroborated["value"],
                                    corroborated["source"], refresh_cache=False)
@@ -236,7 +288,7 @@ def main() -> None:
                                        refresh_cache=False)
                 stats["build_year"] += 1
             elif s.build_year:
-                prov["build_year"] = entry(s.build_year, s.source or "benchmark_report")
+                prov["build_year"] = entry(s.build_year, fallback_source(s, "build_year"))
 
             s.field_provenance = prov
             flag_modified(s, "field_provenance")

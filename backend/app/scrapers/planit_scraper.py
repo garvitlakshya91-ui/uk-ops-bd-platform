@@ -70,6 +70,26 @@ PLANIT_STATUS_MAP: dict[str, str] = {
 }
 
 
+def planit_party_names(rec: dict[str, Any]) -> tuple[str, str]:
+    """Return ``(applicant_name, agent_name)`` for a raw PlanIt record.
+
+    PlanIt keeps both under ``other_fields``, not at the top level, and
+    redacts personal names to the literal text "See source". A redacted or
+    missing name falls back to the matching ``*_company`` field, which is
+    not redacted; if that is empty too the result is "".
+    """
+    other = rec.get("other_fields") or {}
+
+    def _pick(role: str) -> str:
+        for key in (f"{role}_name", f"{role}_company"):
+            value = str(other.get(key) or "").strip()
+            if value and value.lower() != "see source":
+                return value
+        return ""
+
+    return _pick("applicant"), _pick("agent")
+
+
 class PlanItScraper(BaseScraper):
     """
     Scraper for the PlanIt planning application aggregator API.

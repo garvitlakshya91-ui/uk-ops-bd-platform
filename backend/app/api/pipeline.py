@@ -291,6 +291,8 @@ def create_opportunity(data: OpportunityCreate, current_user: User = Depends(req
     check_analyst_stage_gating(current_user, data.stage)
 
     opp = PipelineOpportunity(**data.model_dump())
+    # title is NOT NULL in the table and the create form does not send one.
+    opp.title = f"{company.name} ({data.source})"[:500]
 
     # Auto-set assigned_to_user_id for analysts
     if current_user.role == "bd_analyst":

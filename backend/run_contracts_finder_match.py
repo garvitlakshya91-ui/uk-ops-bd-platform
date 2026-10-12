@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import re
 import sys
@@ -125,7 +126,7 @@ def fetch(days: int, use_cache: bool = False):
                     if ref in seen:
                         continue
                     seen.add(ref)
-                    b.pop("raw_release", None)
+                    # raw_release stays in: it is stored on the contract row.
                     fh.write(_json.dumps(b, default=str) + "\n")
                 fh.flush()
         return len(seen)
@@ -205,10 +206,12 @@ def main():
                      operator_company_id, client_company_id,
                      contract_start_date, contract_end_date, contract_value,
                      currency, source, source_reference, is_current,
-                     created_at, updated_at)
+                     raw_data, created_at, updated_at)
                 VALUES (:sid, :ref, :ct, :op, :cl, :sd, :ed, :val, 'GBP',
-                        'contracts_finder', :ref, :cur, NOW(), NOW())
+                        'contracts_finder', :ref, :cur,
+                        CAST(:raw AS json), NOW(), NOW())
             """), {"sid": sid, "ref": n["source_reference"], "ct": ctype,
+                   "raw": json.dumps(n, default=str),
                    "op": op_id, "cl": client_id,
                    "sd": n.get("contract_start_date"),
                    "ed": n.get("contract_end_date"),

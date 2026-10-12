@@ -1,5 +1,12 @@
 """Append-only writes to scheme_rents.
 
+LEGACY: this module writes the legacy ``scheme_rents`` table, frozen at
+revision 020 (its rows were copied to ``area_rent_benchmarks``,
+``scheme_advertised_rents`` and ``scheme_room_rents``). New code must use
+``app.models.rents`` (``record_room_rent``, ``record_advertised_rent``,
+``record_incentive``, ``record_area_benchmark``, ``supersede``) instead.
+Kept so older scripts still import; do not add callers.
+
 Rent observations are the one dataset that cannot be backfilled: once an
 advertised price leaves an operator's website it is gone. Nothing may
 DELETE from or UPDATE prices in scheme_rents. A new observation

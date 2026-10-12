@@ -16,6 +16,7 @@ from app.models.models import (
     Alert,
 )
 from app.api.auth import get_current_user
+from app.registry.core import reportable_filters
 from app.models.user import User
 
 router = APIRouter(prefix="/api/dashboard", tags=["Dashboard"])
@@ -86,15 +87,25 @@ def dashboard_stats(current_user: User = Depends(get_current_user), db: Session 
     today = datetime.date.today()
 
     # Totals
-    total_applications = db.query(func.count(PlanningApplication.id)).scalar() or 0
+    total_applications = (
+        db.query(func.count(PlanningApplication.id))
+        .filter(PlanningApplication.is_clone.is_(False))
+        .scalar()
+        or 0
+    )
     new_this_week = (
         db.query(func.count(PlanningApplication.id))
-        .filter(PlanningApplication.created_at >= week_ago)
+        .filter(
+            PlanningApplication.created_at >= week_ago,
+            PlanningApplication.is_clone.is_(False),
+        )
         .scalar()
         or 0
     )
     total_companies = db.query(func.count(Company.id)).scalar() or 0
-    total_schemes = db.query(func.count(ExistingScheme.id)).scalar() or 0
+    total_schemes = (
+        db.query(func.count(ExistingScheme.id)).filter(*reportable_filters()).scalar() or 0
+    )
     total_pipeline = db.query(func.count(PipelineOpportunity.id)).scalar() or 0
     unread_alerts = (
         db.query(func.count(Alert.id)).filter(Alert.is_read == False).scalar() or 0  # noqa: E712
@@ -107,6 +118,7 @@ def dashboard_stats(current_user: User = Depends(get_current_user), db: Session 
             PlanningApplication.scheme_type,
             func.count(PlanningApplication.id),
         )
+        .filter(PlanningApplication.is_clone.is_(False))
         .group_by(PlanningApplication.scheme_type)
         .order_by(func.count(PlanningApplication.id).desc())
         .all()
@@ -121,6 +133,7 @@ def dashboard_stats(current_user: User = Depends(get_current_user), db: Session 
             func.count(PlanningApplication.id),
         )
         .join(PlanningApplication, PlanningApplication.council_id == Council.id)
+        .filter(PlanningApplication.is_clone.is_(False))
         .group_by(Council.id, Council.name)
         .order_by(func.count(PlanningApplication.id).desc())
         .limit(10)
@@ -148,6 +161,7 @@ def dashboard_stats(current_user: User = Depends(get_current_user), db: Session 
                 ExistingScheme.contract_end_date.isnot(None),
                 ExistingScheme.contract_end_date >= today,
                 ExistingScheme.contract_end_date <= expiry_cutoff,
+                *reportable_filters(),
             )
         )
         .order_by(ExistingScheme.contract_end_date.asc())
@@ -161,7 +175,7 @@ def dashboard_stats(current_user: User = Depends(get_current_user), db: Session 
             scheme_name=scheme.name,
             operator=operator_name,
             contract_end_date=scheme.contract_end_date,
-            num_units=scheme.num_units,
+            num_units=scheme.unit_count,
             days_until_expiry=(scheme.contract_end_date - today).days,
         )
         for scheme, operator_name in expiring_rows

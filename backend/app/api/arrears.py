@@ -164,7 +164,7 @@ def _scheme_to_row(s: ExistingScheme) -> ArrearsSchemeRow:
         operator=s.operator_company.name if s.operator_company else None,
         operator_company_id=s.operator_company_id,
         scheme_type=s.scheme_type,
-        units=s.num_units,
+        units=s.unit_count,
         arrears_score=round(s.arrears_risk_score, 1) if s.arrears_risk_score is not None else 0.0,
         bucket=_bucket(s.arrears_risk_score),
         top_signal=_summarize_signal(s.arrears_risk_score),
@@ -184,8 +184,10 @@ def arrears_overview(
     db: Session = Depends(get_db),
 ):
     """Powers the /arrears intelligence hub page in one round trip."""
+    from app.registry.core import listable_filters
     base_q = db.query(ExistingScheme).filter(
         ExistingScheme.scheme_type.in_(BD_TYPES),
+        *listable_filters(),
     )
 
     total_bd_cohort = base_q.count()
@@ -366,7 +368,7 @@ def arrears_overview(
                 "scheme_id": s.id,
                 "name": s.name,
                 "arrears_score": round(s.arrears_risk_score, 1),
-                "units": s.num_units,
+                "units": s.unit_count,
             }
             for s in sample_q
         ]

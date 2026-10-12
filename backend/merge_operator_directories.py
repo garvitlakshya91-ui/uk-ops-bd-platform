@@ -151,7 +151,7 @@ def main():
                      operator_company_id, source, source_reference, notes,
                      created_at, updated_at, locked_fields)
                 VALUES
-                    (:n, :a, :pc, :cid, :st, 'Operational',
+                    (:n, :a, :pc, :cid, :st, 'operational',
                      :op, 'operator_directory', :ref, :notes,
                      NOW(), NOW(), '{}'::jsonb)
             """), {

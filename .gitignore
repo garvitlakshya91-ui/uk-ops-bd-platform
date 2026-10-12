@@ -89,8 +89,13 @@ test-results/
 # Scraped data artifacts — backed up separately via pg_dump + data zips
 backend/data/sturents/
 backend/data/afs/
+backend/data/national_code/
+backend/data/love_to_rent/
 backend/data/operator_directories/
 backend/data/university_halls/
+backend/data/planning_documents/
+backend/data/cleanup/
+backend/data/enrichment/
 backend/data/ownership_pilot.json
 backend/data/ownership_full_run.log
 backend/*.html

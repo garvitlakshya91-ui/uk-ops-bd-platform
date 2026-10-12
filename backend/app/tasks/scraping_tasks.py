@@ -384,7 +384,36 @@ def scrape_planning_data_api(self) -> dict[str, Any]:
             from app.config import settings
 
             scraper = _load_scraper("planning_data_api", None)
-            result = scraper.scrape()
+            results = _run_async(_run_scraper(scraper)) or []
+
+            # The API covers every authority in one feed; route each row to
+            # its council by organisation entity and drop the rest.
+            council_by_entity = {
+                str(c.organisation_entity): c.id
+                for c in db.query(Council).filter(
+                    Council.organisation_entity.isnot(None)
+                )
+            }
+            by_council: dict[int, list[dict[str, Any]]] = {}
+            unmatched = 0
+            for row in results:
+                council_id = council_by_entity.get(
+                    str(row.get("organisation_entity") or "")
+                )
+                if council_id is None:
+                    unmatched += 1
+                    continue
+                by_council.setdefault(council_id, []).append(row)
+
+            result = {"found": len(results), "new": 0, "updated": 0, "errors": 0}
+            for council_id, rows in by_council.items():
+                stats = _save_planning_applications(db, council_id, rows)
+                for key in ("new", "updated", "errors"):
+                    result[key] += stats.get(key, 0)
+            if unmatched:
+                logger.info(
+                    "scrape_planning_data_api_unmatched", rows=unmatched
+                )
 
             run.applications_found = result.get("found", 0)
             run.applications_new = result.get("new", 0)
@@ -429,45 +458,96 @@ def scrape_planning_data_api(self) -> dict[str, Any]:
     max_retries=3,
     default_retry_delay=600,
     acks_late=True,
+    # Above the global 600s/900s: a 429 from the API costs a 120s pause, and
+    # each batch is ingested between fetches.
+    soft_time_limit=1500,
+    time_limit=1800,
 )
-def scrape_find_a_tender(self) -> dict[str, Any]:
+def scrape_find_a_tender(
+    self,
+    days_back: int = 30,
+    max_pages: int = 500,
+) -> dict[str, Any]:
     """Run the Find a Tender scraper and persist results via ingestion pipeline.
 
-    This task scrapes housing management contract notices from the UK
-    government Find a Tender service and persists them as ExistingScheme
-    and SchemeContract records.
+    Scrapes housing management contract notices from the UK government
+    Find a Tender service and persists them as ExistingScheme and
+    SchemeContract records. Each batch of pages is ingested and committed
+    before the next is fetched, so a run that is cut short keeps what it
+    has already saved.
+
+    Parameters
+    ----------
+    days_back : int
+        Update window to walk. The daily schedule only needs the last
+        30 days; pass more for a one-off back-fill.
+    max_pages : int
+        Safety cap on pages fetched (100 notices per page).
     """
+    from celery.exceptions import SoftTimeLimitExceeded
+
     db = _get_db()
+    totals = {"created": 0, "updated": 0, "skipped": 0, "contracts": 0}
+    batches = 0
     try:
-        logger.info("scrape_find_a_tender_started")
+        logger.info(
+            "scrape_find_a_tender_started",
+            days_back=days_back,
+            max_pages=max_pages,
+        )
         from app.scrapers.find_a_tender import FindATenderScraper
         from app.scrapers.scheme_ingest import ingest_tender_contracts
 
         scraper = FindATenderScraper()
-        raw_results = _run_async(_run_scraper(scraper))
 
-        # Parse each raw result into contract detail dicts
-        parsed = []
-        for raw in raw_results:
-            try:
-                detail = _run_async(scraper.parse_application(raw))
-                parsed.append(detail)
-            except Exception as exc:
-                logger.warning(
-                    "tender_parse_failed",
-                    notice_id=raw.get("notice_id"),
-                    error=str(exc),
-                )
+        async def _scrape_and_ingest() -> None:
+            nonlocal batches
+            async with scraper:
+                async for batch in scraper.iter_batches(
+                    published_from=(
+                        datetime.date.today() - datetime.timedelta(days=days_back)
+                    ),
+                    max_pages=max_pages,
+                    # Stop fetching 5 minutes before the soft limit so the
+                    # last batch still has time to ingest.
+                    time_budget_seconds=1200,
+                ):
+                    if not batch:
+                        continue
+                    stats = ingest_tender_contracts(batch, db)
+                    for key in totals:
+                        totals[key] += stats.get(key, 0)
+                    batches += 1
+                    logger.info(
+                        "scrape_find_a_tender_batch_saved",
+                        batch=batches,
+                        **totals,
+                    )
 
-        # Persist through the ingestion pipeline
-        ingest_stats = ingest_tender_contracts(parsed, db)
+        try:
+            _run_async(_scrape_and_ingest())
+        except SoftTimeLimitExceeded:
+            # Earlier batches are already committed; drop only the one in flight.
+            db.rollback()
+            logger.warning(
+                "scrape_find_a_tender_time_limit", batches=batches, **totals
+            )
+            return {"status": "partial", "batches": batches, **totals}
 
-        logger.info("scrape_find_a_tender_completed", **ingest_stats)
+        status = "partial" if scraper.truncated else "success"
+        logger.info(
+            "scrape_find_a_tender_completed",
+            status=status,
+            batches=batches,
+            **totals,
+        )
         _trigger_enrichment()
-        return {"status": "success", **ingest_stats}
+        return {"status": status, "batches": batches, **totals}
 
     except Exception as exc:
-        logger.exception("scrape_find_a_tender_failed")
+        logger.exception(
+            "scrape_find_a_tender_failed", batches=batches, **totals
+        )
         raise self.retry(exc=exc)
     finally:
         db.close()
@@ -479,30 +559,95 @@ def scrape_find_a_tender(self) -> dict[str, Any]:
     max_retries=3,
     default_retry_delay=600,
     acks_late=True,
+    # Above the global 600s/900s: a 429 from the API costs a 120s pause, and
+    # each batch is ingested between fetches.
+    soft_time_limit=1500,
+    time_limit=1800,
 )
-def scrape_contracts_finder(self) -> dict[str, Any]:
+def scrape_contracts_finder(
+    self,
+    days_back: int = 14,
+    max_pages: int = 200,
+) -> dict[str, Any]:
     """Run the Contracts Finder scraper and persist results.
 
     Scrapes housing-related contract notices from the UK Contracts Finder
-    service and persists them via the ingestion pipeline.
+    service and persists them via the ingestion pipeline. Each batch of
+    pages is ingested and committed before the next is fetched, so a run
+    that is cut short keeps what it has already saved.
+
+    Parameters
+    ----------
+    days_back : int
+        Publication window to walk, newest first. The daily schedule only
+        needs the last fortnight; pass more for a one-off back-fill.
+    max_pages : int
+        Safety cap on pages fetched (100 notices per page).
     """
+    from celery.exceptions import SoftTimeLimitExceeded
+
     db = _get_db()
+    totals = {"created": 0, "updated": 0, "skipped": 0, "contracts": 0}
+    batches = 0
     try:
-        logger.info("scrape_contracts_finder_started")
+        logger.info(
+            "scrape_contracts_finder_started",
+            days_back=days_back,
+            max_pages=max_pages,
+        )
         from app.scrapers.contracts_finder import ContractsFinderScraper
         from app.scrapers.scheme_ingest import ingest_contracts_finder
 
         scraper = ContractsFinderScraper()
-        raw_results = _run_async(_run_scraper(scraper))
 
-        ingest_stats = ingest_contracts_finder(raw_results, db)
+        async def _scrape_and_ingest() -> None:
+            nonlocal batches
+            async with scraper:
+                async for batch in scraper.iter_batches(
+                    published_from=(
+                        datetime.date.today() - datetime.timedelta(days=days_back)
+                    ),
+                    max_pages=max_pages,
+                    # Stop fetching 5 minutes before the soft limit so the
+                    # last batch still has time to ingest.
+                    time_budget_seconds=1200,
+                ):
+                    if not batch:
+                        continue
+                    stats = ingest_contracts_finder(batch, db)
+                    for key in totals:
+                        totals[key] += stats.get(key, 0)
+                    batches += 1
+                    logger.info(
+                        "scrape_contracts_finder_batch_saved",
+                        batch=batches,
+                        **totals,
+                    )
 
-        logger.info("scrape_contracts_finder_completed", **ingest_stats)
+        try:
+            _run_async(_scrape_and_ingest())
+        except SoftTimeLimitExceeded:
+            # Earlier batches are already committed; drop only the one in flight.
+            db.rollback()
+            logger.warning(
+                "scrape_contracts_finder_time_limit", batches=batches, **totals
+            )
+            return {"status": "partial", "batches": batches, **totals}
+
+        status = "partial" if scraper.truncated else "success"
+        logger.info(
+            "scrape_contracts_finder_completed",
+            status=status,
+            batches=batches,
+            **totals,
+        )
         _trigger_enrichment()
-        return {"status": "success", **ingest_stats}
+        return {"status": status, "batches": batches, **totals}
 
     except Exception as exc:
-        logger.exception("scrape_contracts_finder_failed")
+        logger.exception(
+            "scrape_contracts_finder_failed", batches=batches, **totals
+        )
         raise self.retry(exc=exc)
     finally:
         db.close()
@@ -1318,10 +1463,12 @@ def _save_planit_record_v2(
         return "existing"
 
     # Field mapping
+    from app.scrapers.planit_scraper import planit_party_names
+
     description = rec.get("description") or ""
-    applicant_name = rec.get("applicant_name") or ""
-    agent_name = rec.get("agent_name") or ""
+    applicant_name, agent_name = planit_party_names(rec)
     address = rec.get("address") or ""
+    postcode = rec.get("postcode") or classifier_cls.extract_postcode(address)
 
     # Status mapping
     status_map = {
@@ -1361,18 +1508,19 @@ def _save_planit_record_v2(
     db.execute(
         text("""
             INSERT INTO planning_applications
-                (reference, council_id, address, description, applicant_name,
-                 agent_name, application_type, status, scheme_type, num_units,
+                (reference, council_id, address, postcode, description,
+                 applicant_name, agent_name, application_type, status,
+                 scheme_type, num_units,
                  latitude, longitude, submission_date, source, raw_data,
                  created_at, updated_at)
             VALUES
-                (:ref, :cid, :addr, :desc, :app, :agent, :atype, :status,
+                (:ref, :cid, :addr, :pc, :desc, :app, :agent, :atype, :status,
                  :stype, :units, :lat, :lon, :sdate, 'planit_api',
                  CAST(:raw AS jsonb), :now, :now)
         """),
         {
             "ref": uid, "cid": council_id,
-            "addr": address, "desc": description,
+            "addr": address, "pc": postcode or None, "desc": description,
             "app": applicant_name or None,
             "agent": agent_name or None,
             "atype": rec.get("app_type"),
@@ -1574,12 +1722,22 @@ def _load_scraper(scraper_class_name: str | None, council: Council | None) -> An
     Raises ``ValueError`` if the portal type is unsupported — no longer
     silently falls back to a stub, since that masked real scraping failures.
     """
-    if not scraper_class_name or not council:
+    if not scraper_class_name:
         raise ValueError(
             f"Cannot load scraper: class={scraper_class_name}, council={council}"
         )
 
     portal = scraper_class_name.lower()
+
+    # Only the web-portal scrapers are built from a Council row; API
+    # scrapers (planning_data_api, find_a_tender) run without one.
+    needs_council = portal in (
+        "idox", "idoxscraper", "nec", "necscraper", "civica", "civicascraper",
+    )
+    if needs_council and not council:
+        raise ValueError(
+            f"Cannot load scraper: class={scraper_class_name}, council={council}"
+        )
 
     # Map portal types (and legacy class-name aliases) to module paths.
     scraper_map: dict[str, str] = {

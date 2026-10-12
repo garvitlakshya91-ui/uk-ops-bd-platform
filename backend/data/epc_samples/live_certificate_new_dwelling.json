@@ -1,0 +1,326 @@
+{
+ "_note": "Recorded from the live register on 2026-10-10; addresses, postcodes, UPRNs and certificate numbers replaced.",
+ "data": {
+  "uprn": 100000000001,
+  "roofs": [
+   {
+    "description": {
+     "value": "(other premises above)",
+     "language": "1"
+    },
+    "energy_efficiency_rating": 0,
+    "environmental_efficiency_rating": 0
+   }
+  ],
+  "walls": [
+   {
+    "description": {
+     "value": "Average thermal transmittance 0.70 W/m\u00b2K",
+     "language": "1"
+    },
+    "energy_efficiency_rating": 3,
+    "environmental_efficiency_rating": 3
+   }
+  ],
+  "floors": [
+   {
+    "description": {
+     "value": "Average thermal transmittance 0.70 W/m\u00b2K",
+     "language": "1"
+    },
+    "energy_efficiency_rating": 2,
+    "environmental_efficiency_rating": 2
+   }
+  ],
+  "status": "entered",
+  "tenure": "ND",
+  "windows": {
+   "description": {
+    "value": "Fully double glazed",
+    "language": "1"
+   },
+   "energy_efficiency_rating": 4,
+   "environmental_efficiency_rating": 4
+  },
+  "lighting": {
+   "description": {
+    "value": "Low energy lighting in all fixed outlets",
+    "language": "1"
+   },
+   "energy_efficiency_rating": 5,
+   "environmental_efficiency_rating": 5
+  },
+  "postcode": "A0 0AA",
+  "data_type": 2,
+  "hot_water": {
+   "description": {
+    "value": "Community scheme",
+    "language": "1"
+   },
+   "energy_efficiency_rating": 5,
+   "environmental_efficiency_rating": 5
+  },
+  "post_town": "LONDON",
+  "built_form": 1,
+  "created_at": "2017-07-07 12:23:51",
+  "living_area": 41.56,
+  "orientation": 5,
+  "region_code": 17,
+  "report_type": 3,
+  "sap_heating": {
+   "water_heating_code": 950,
+   "main_heating_details": [
+    {
+     "main_heating_code": 306,
+     "emitter_temperature": "NA",
+     "main_heating_number": 1,
+     "main_heating_control": 2311,
+     "is_interlocked_system": "false",
+     "main_heating_category": 6,
+     "main_heating_fraction": 1,
+     "main_heating_data_source": 3,
+     "is_central_heating_pump_in_heated_space": "false"
+    }
+   ],
+   "has_hot_water_cylinder": "false",
+   "has_fixed_air_conditioning": "false",
+   "secondary_heating_category": 1,
+   "sap_heating_design_water_use": 1,
+   "sap_community_heating_systems": [
+    {
+     "community_heating_use": 1,
+     "community_heat_sources": [
+      {
+       "fuel_type": 51,
+       "heat_fraction": 1,
+       "heat_efficiency": 96.91,
+       "heat_source_type": 2
+      }
+     ],
+     "charging_linked_to_heat_use": "false",
+     "community_heating_distribution_type": 6,
+     "is_community_heating_cylinder_in_dwelling": "false"
+    },
+    {
+     "community_heating_use": 2,
+     "community_heat_sources": [
+      {
+       "fuel_type": 51,
+       "heat_fraction": 1,
+       "heat_efficiency": 96.91,
+       "heat_source_type": 2
+      }
+     ],
+     "community_heating_distribution_type": 1
+    }
+   ]
+  },
+  "sap_version": 9.92,
+  "schema_type": "SAP-Schema-17.1",
+  "uprn_source": "Energy Assessor",
+  "country_code": "ENG",
+  "main_heating": [
+   {
+    "description": {
+     "value": "Community scheme",
+     "language": "1"
+    },
+    "energy_efficiency_rating": 3,
+    "environmental_efficiency_rating": 3
+   }
+  ],
+  "air_tightness": {
+   "description": {
+    "value": "(not tested)",
+    "language": "1"
+   },
+   "energy_efficiency_rating": 0,
+   "environmental_efficiency_rating": 0
+  },
+  "dwelling_type": {
+   "value": "Ground-floor flat",
+   "language": "1"
+  },
+  "language_code": 1,
+  "property_type": 2,
+  "address_line_1": "Flat 1",
+  "assessment_date": "2017-03-09",
+  "assessment_type": "SAP",
+  "completion_date": "2017-07-07",
+  "inspection_date": "2017-03-09",
+  "sap_ventilation": {
+   "psv_count": 0,
+   "pressure_test": 3,
+   "wet_rooms_count": 3,
+   "air_permeability": 15,
+   "open_flues_count": 0,
+   "ventilation_type": 8,
+   "extract_fans_count": 0,
+   "open_fireplaces_count": 0,
+   "sheltered_sides_count": 2,
+   "flueless_gas_fires_count": 0,
+   "mechanical_vent_duct_type": 2,
+   "mechanical_vent_duct_insulation": 2,
+   "mechanical_ventilation_data_source": 1,
+   "mechanical_vent_system_index_number": 500303,
+   "is_mechanical_vent_approved_installer_scheme": "false"
+  },
+  "design_water_use": 1,
+  "sap_data_version": 9.92,
+  "sap_flat_details": {
+   "level": 1
+  },
+  "total_floor_area": 107,
+  "transaction_type": 6,
+  "conservatory_type": 1,
+  "registration_date": "2017-07-07",
+  "sap_energy_source": {
+   "electricity_tariff": 1,
+   "wind_turbines_count": 0,
+   "wind_turbine_terrain_type": 2,
+   "fixed_lighting_outlets_count": 10,
+   "low_energy_fixed_lighting_outlets_count": 10,
+   "low_energy_fixed_lighting_outlets_percentage": 100
+  },
+  "sap_opening_types": [
+   {
+    "name": "Windows (1)",
+    "type": 4,
+    "u_value": 1.8,
+    "frame_type": 2,
+    "data_source": 3,
+    "glazing_gap": 3,
+    "frame_factor": 0.7,
+    "glazing_type": 6,
+    "isargonfilled": "true",
+    "solar_transmittance": 0.63
+   }
+  ],
+  "secondary_heating": {
+   "description": {
+    "value": "None",
+    "language": "1"
+   },
+   "energy_efficiency_rating": 0,
+   "environmental_efficiency_rating": 0
+  },
+  "sap_building_parts": [
+   {
+    "sap_roofs": [
+     {
+      "name": "Exposed Roof",
+      "u_value": 0,
+      "roof_type": 2,
+      "kappa_value": 0,
+      "total_roof_area": 0
+     }
+    ],
+    "sap_walls": [
+     {
+      "name": "Exposed",
+      "u_value": 0.7,
+      "wall_type": 2,
+      "kappa_value": 17,
+      "total_wall_area": 57.32,
+      "is_curtain_walling": "false"
+     },
+     {
+      "name": "Party",
+      "u_value": 0,
+      "wall_type": 4,
+      "kappa_value": 180,
+      "total_wall_area": 59.71
+     }
+    ],
+    "identifier": "Main Dwelling",
+    "overshading": 2,
+    "sap_openings": [
+     {
+      "name": 1,
+      "type": "Windows (1)",
+      "width": 1,
+      "height": 27.95,
+      "location": "Exposed",
+      "orientation": 5
+     }
+    ],
+    "construction_year": 2017,
+    "sap_thermal_bridges": {
+     "thermal_bridge_code": 1
+    },
+    "building_part_number": 1,
+    "sap_floor_dimensions": [
+     {
+      "storey": 0,
+      "u_value": 0.7,
+      "floor_type": 2,
+      "kappa_value": 110,
+      "storey_height": 3.91,
+      "heat_loss_area": 107.28,
+      "total_floor_area": 107.28
+     }
+    ]
+   }
+  ],
+  "heating_cost_current": {
+   "value": 809,
+   "currency": "GBP"
+  },
+  "co2_emissions_current": 4.1,
+  "energy_rating_average": 60,
+  "energy_rating_current": 58,
+  "lighting_cost_current": {
+   "value": 66,
+   "currency": "GBP"
+  },
+  "main_heating_controls": [
+   {
+    "description": {
+     "value": "Flat rate charging, programmer and at least two room thermostats",
+     "language": "1"
+    },
+    "energy_efficiency_rating": 3,
+    "environmental_efficiency_rating": 3
+   }
+  ],
+  "has_hot_water_cylinder": "false",
+  "heating_cost_potential": {
+   "value": 809,
+   "currency": "GBP"
+  },
+  "hot_water_cost_current": {
+   "value": 141,
+   "currency": "GBP"
+  },
+  "co2_emissions_potential": 4.1,
+  "energy_rating_potential": 58,
+  "lighting_cost_potential": {
+   "value": 66,
+   "currency": "GBP"
+  },
+  "schema_version_original": "LIG-17.0",
+  "hot_water_cost_potential": {
+   "value": 141,
+   "currency": "GBP"
+  },
+  "is_in_smoke_control_area": "unknown",
+  "renewable_heat_incentive": {
+   "rhi_new_dwelling": {
+    "space_heating": 8176,
+    "water_heating": 2234
+   }
+  },
+  "seller_commission_report": "Y",
+  "energy_consumption_current": 215,
+  "has_fixed_air_conditioning": "false",
+  "multiple_glazed_percentage": 100,
+  "calculation_software_version": "Version: 1.0.4.7",
+  "energy_consumption_potential": 215,
+  "environmental_impact_current": 55,
+  "current_energy_efficiency_band": "D",
+  "environmental_impact_potential": 55,
+  "has_heated_separate_conservatory": "false",
+  "potential_energy_efficiency_band": "D",
+  "co2_emissions_current_per_floor_area": 38
+ }
+}

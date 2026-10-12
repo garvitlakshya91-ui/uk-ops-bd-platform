@@ -428,6 +428,7 @@ class AlertManager:
 
         query = self.db.query(PlanningApplication).filter(
             PlanningApplication.created_at >= cutoff,
+            PlanningApplication.is_clone.is_(False),
         )
 
         if scheme_types:
@@ -499,6 +500,7 @@ class AlertManager:
             .filter(
                 PlanningApplication.updated_at >= cutoff,
                 PlanningApplication.status.in_(decision_statuses),
+                PlanningApplication.is_clone.is_(False),
             )
             .all()
         )

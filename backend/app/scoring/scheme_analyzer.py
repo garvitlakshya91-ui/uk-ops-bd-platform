@@ -134,8 +134,8 @@ class SchemeAnalyzer:
             risk_factors.append(f"Low satisfaction score ({scheme.satisfaction_score}/100) suggests client may seek alternatives.")
         if scheme.financial_health_score is not None and scheme.financial_health_score < 40:
             risk_factors.append(f"Poor financial health ({scheme.financial_health_score}/100) may indicate operational difficulties.")
-        if scheme.num_units and scheme.num_units >= 200:
-            risk_factors.append(f"Large scheme ({scheme.num_units} units) represents significant revenue opportunity.")
+        if scheme.unit_count and scheme.unit_count >= 200:
+            risk_factors.append(f"Large scheme ({scheme.unit_count} units) represents significant revenue opportunity.")
 
         # Renewal window — typically 6-12 months before expiry.
         renewal_window_opens = effective_end_date - datetime.timedelta(days=365)
@@ -277,7 +277,7 @@ class SchemeAnalyzer:
                 "name": scheme.name,
                 "postcode": scheme.postcode,
                 "scheme_type": scheme.scheme_type,
-                "num_units": scheme.num_units,
+                "num_units": scheme.unit_count,
                 "bd_score": bd_score,
                 "contract_risk_level": contract_risk["risk_level"],
                 "months_to_expiry": contract_risk.get("months_remaining"),
@@ -366,7 +366,7 @@ class SchemeAnalyzer:
                 "scheme_types": {},
             }
 
-        total_units = sum(s.num_units or 0 for s in schemes)
+        total_units = sum(s.unit_count or 0 for s in schemes)
         perf_ratings = [s.performance_rating for s in schemes if s.performance_rating is not None]
         sat_scores = [s.satisfaction_score for s in schemes if s.satisfaction_score is not None]
 
@@ -503,7 +503,7 @@ class SchemeAnalyzer:
                 "address": scheme.address,
                 "postcode": scheme.postcode,
                 "scheme_type": scheme.scheme_type,
-                "num_units": scheme.num_units,
+                "num_units": scheme.unit_count,
                 "regulatory_rating": scheme.regulatory_rating,
             },
             "bd_score": bd_score,

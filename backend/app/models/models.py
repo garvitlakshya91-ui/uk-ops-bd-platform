@@ -16,8 +16,10 @@ from sqlalchemy import (
     Numeric,
     func,
     true,
+    false,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -81,6 +83,10 @@ class Company(Base):
     parent_company_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("companies.id"), nullable=True
     )
+    merged_into_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("companies.id", ondelete="SET NULL"), nullable=True,
+        comment="Set when this company row was merged into another; the surviving company",
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -91,7 +97,8 @@ class Company(Base):
 
     # Relationships
     parent_company: Mapped[Optional["Company"]] = relationship(
-        "Company", remote_side="Company.id", backref="subsidiaries"
+        "Company", remote_side="Company.id", backref="subsidiaries",
+        foreign_keys="Company.parent_company_id",
     )
     contacts: Mapped[List["Contact"]] = relationship(
         "Contact", back_populates="company", cascade="all, delete-orphan"
@@ -240,6 +247,13 @@ class PlanningApplication(Base):
     beds_max: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     beds_basis: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     delivery_year_basis: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Evidence behind pbsa_beds (migration 018); the full figure list is in
+    # unit_extractions.
+    beds_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    beds_quote: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    beds_extractor: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True, comment="regex, ai, manual"
+    )
     submission_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     submitted_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     validated_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
@@ -255,6 +269,12 @@ class PlanningApplication(Base):
     documents_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     ward: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     is_btr: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
+    # Row copied across councils by the 16 May 2026 ingest fault (migration
+    # 022): same reference and text under ~260 councils. Kept, but left out
+    # of lists, counts, maps and scores.
+    is_clone: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     is_pbsa: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
     is_affordable: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
     bd_relevance_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -351,6 +371,10 @@ class ExistingScheme(Base):
         Integer, nullable=True, comment="PBSA bed spaces, distinct from units"
     )
     build_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    completion_date: Mapped[Optional[datetime.date]] = mapped_column(
+        Date, nullable=True,
+        comment="1 January of build_year where only the year is known",
+    )
     nominations: Mapped[Optional[bool]] = mapped_column(
         Boolean, nullable=True,
         comment="Let under a university nominations/lease agreement",
@@ -436,6 +460,32 @@ class ExistingScheme(Base):
         JSONB, nullable=False, server_default="{}",
         comment="Per-field source precedence lock: {field_name: source_label}",
     )
+    # Registry (migration 019): this row's id is the permanent scheme ID.
+    # Names it has been known by live in scheme_aliases; every feed record
+    # that describes it in scheme_source_records.
+    verification_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="unverified",
+        comment="unverified, probable, verified, disputed, retired",
+    )
+    verified_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    verified_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    verification_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    shared_postcode_ok: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(),
+        comment="An analyst confirmed this scheme is distinct from others at the same postcode",
+    )
+    merged_into_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="SET NULL"), nullable=True,
+        comment="Set when this row was found to duplicate another scheme; the survivor's id",
+    )
+    # What kind of thing the row is (migration 021). Most rows are postcode
+    # clusters of energy certificates, not operator-managed schemes.
+    record_class: Mapped[str] = mapped_column(
+        String(30), nullable=False, server_default="scheme",
+        comment="scheme, development_cluster, procurement_notice, listing_fragment, ingest_artefact",
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -478,6 +528,27 @@ class ExistingScheme(Base):
         "SchemeChangeLog", back_populates="scheme",
         cascade="all, delete-orphan",
     )
+    aliases: Mapped[List["SchemeAlias"]] = relationship(
+        "SchemeAlias", back_populates="scheme",
+        cascade="all, delete-orphan",
+    )
+    source_records: Mapped[List["SchemeSourceRecord"]] = relationship(
+        "SchemeSourceRecord", back_populates="scheme",
+        foreign_keys="SchemeSourceRecord.scheme_id",
+    )
+
+    @hybrid_property
+    def unit_count(self) -> Optional[int]:
+        """Size for lists, filters, sorting and scoring: num_units, or
+        beds_total where no unit count is held (most PBSA schemes only
+        publish beds). Works on an instance and in a query. The figure is
+        then a bed count, not a unit count -- see beds_total."""
+        return self.num_units if self.num_units is not None else self.beds_total
+
+    @unit_count.inplace.expression
+    @classmethod
+    def _unit_count_expression(cls):
+        return func.coalesce(cls.num_units, cls.beds_total)
 
     __table_args__ = (
         Index("ix_existing_schemes_postcode", "postcode"),
@@ -488,6 +559,89 @@ class ExistingScheme(Base):
         Index("ix_existing_schemes_last_verified_at", "last_verified_at"),
         Index("ix_existing_schemes_asset_manager_company_id", "asset_manager_company_id"),
         Index("ix_existing_schemes_landlord_company_id", "landlord_company_id"),
+    )
+
+
+class SchemeAlias(Base):
+    """An alternate name for a registry scheme: a feed's spelling, a former
+    brand, a listing title. Matching consults aliases before fuzzy names."""
+
+    __tablename__ = "scheme_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scheme_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="CASCADE"), nullable=False
+    )
+    alias: Mapped[str] = mapped_column(String(500), nullable=False)
+    alias_norm: Mapped[str] = mapped_column(
+        String(500), nullable=False,
+        comment="lower-cased, punctuation stripped, stop words removed; the match key",
+    )
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    scheme: Mapped["ExistingScheme"] = relationship("ExistingScheme", back_populates="aliases")
+
+    __table_args__ = (
+        UniqueConstraint("scheme_id", "alias_norm", name="uq_scheme_alias"),
+        Index("ix_scheme_aliases_norm", "alias_norm"),
+    )
+
+
+class SchemeSourceRecord(Base):
+    """One record from one feed, linked to the registry scheme it describes,
+    or waiting in the review queue when nothing matched."""
+
+    __tablename__ = "scheme_source_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scheme_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="SET NULL"), nullable=True
+    )
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_reference: Mapped[str] = mapped_column(
+        String(500), nullable=False, comment="URL, feed id or benchmark row key"
+    )
+    raw_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    raw_postcode: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    raw_operator: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    raw_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    match_method: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True,
+        comment="postcode_name, name_exact, url, merge, manual, ai_proposed",
+    )
+    match_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="unmatched",
+        comment="matched, proposed, unmatched, rejected, ignored",
+    )
+    proposed_scheme_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="SET NULL"), nullable=True
+    )
+    proposal_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    proposal_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    confirmed_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    confirmed_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    first_seen: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_seen: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    scheme: Mapped[Optional["ExistingScheme"]] = relationship(
+        "ExistingScheme", back_populates="source_records", foreign_keys=[scheme_id]
+    )
+
+    __table_args__ = (
+        UniqueConstraint("source", "source_reference", name="uq_scheme_source_record"),
+        Index("ix_scheme_source_records_scheme", "scheme_id"),
+        Index("ix_scheme_source_records_status", "status"),
     )
 
 
@@ -653,6 +807,132 @@ class SchemeRent(Base):
     )
 
 
+class AreaRentBenchmark(Base):
+    """Area-level rent reference (ONS private rents, social-rent returns):
+    context for a council, never a scheme's price."""
+
+    __tablename__ = "area_rent_benchmarks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    council_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("councils.id", ondelete="SET NULL"), nullable=True
+    )
+    area_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    area_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    segment: Mapped[str] = mapped_column(
+        String(80), nullable=False, comment="e.g. 'Area avg 2-bed (LA)', 'Social rent GN 1-bed (LA)'"
+    )
+    rent_pcm: Mapped[Optional[float]] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+    rent_ppw: Mapped[Optional[float]] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+    period: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, comment="'2026-06' or '2024/25'")
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    captured_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    superseded_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_area_rent_council", "council_id", "segment", "is_current"),)
+
+
+class SchemeAdvertisedRent(Base):
+    """A listing's entry price for a scheme ("from £189/wk"): a scheme
+    attribute captured per feed, not a room tier."""
+
+    __tablename__ = "scheme_advertised_rents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scheme_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(12), nullable=False, comment="from, to, advertised")
+    rent_ppw: Mapped[Optional[float]] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+    rent_pcm: Mapped[Optional[float]] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="GBP")
+    academic_year: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    contract_length_weeks: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    captured_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    superseded_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    legacy_rent_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    scheme: Mapped["ExistingScheme"] = relationship("ExistingScheme", backref="advertised_rents")
+
+    __table_args__ = (
+        Index("ix_adv_rents_scheme", "scheme_id", "is_current"),
+        Index("ix_adv_rents_source", "source", "is_current"),
+    )
+
+
+class SchemeRoomRent(Base):
+    """One room-tier price observation: scheme x room type x operator tier x
+    letting year x tenancy length. Append-only; a re-capture supersedes the
+    prior row for the same key, so the series survives."""
+
+    __tablename__ = "scheme_room_rents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scheme_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="CASCADE"), nullable=False
+    )
+    room_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    sub_classification: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    rent_ppw: Mapped[Optional[float]] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+    rent_pcm: Mapped[Optional[float]] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, server_default="GBP")
+    academic_year: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    contract_length_weeks: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bills_included: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    captured_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    superseded_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    legacy_rent_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    scheme: Mapped["ExistingScheme"] = relationship("ExistingScheme", backref="room_rents")
+
+    __table_args__ = (
+        Index("ix_room_rents_scheme", "scheme_id", "is_current"),
+        Index("ix_room_rents_source", "source", "is_current"),
+        Index("ix_room_rents_series", "scheme_id", "room_type", "sub_classification", "captured_at"),
+    )
+
+
+class SchemeIncentive(Base):
+    """An advertised offer on a scheme, typed where the wording allows."""
+
+    __tablename__ = "scheme_incentives"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scheme_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("existing_schemes.id", ondelete="CASCADE"), nullable=False
+    )
+    raw_text: Mapped[str] = mapped_column(String(300), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="other",
+        comment="cash, weekly_off, percent, free_weeks, other",
+    )
+    amount: Mapped[Optional[float]] = mapped_column(Numeric(10, 2, asdecimal=False), nullable=True)
+    academic_year: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    captured_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    superseded_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_incentives_scheme", "scheme_id", "is_current"),)
+
+
 class SchemeAvailability(Base):
     """One availability observation per scheme per capture — append-only.
 
@@ -808,9 +1088,63 @@ class SchemeObservation(Base):
     observed_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # Evidence for machine-read values (migration 018).
+    confidence: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="0-1; how firmly the source states the value"
+    )
+    quote: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, comment="The phrase the value was read from"
+    )
+    extractor: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True, comment="regex, ai, manual, feed"
+    )
+    model: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
 
     __table_args__ = (
         Index("ix_obs_scheme_field_time", "scheme_id", "field", "observed_at"),
+    )
+
+
+class UnitExtractionRecord(Base):
+    """Every typed figure the unit extractor read from a description, page
+    or document, with its envelope/alternative flags and confidence. The
+    cached number on the entity is chosen from these; they are the audit
+    trail behind it."""
+
+    __tablename__ = "unit_extractions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entity_type: Mapped[str] = mapped_column(
+        String(30), nullable=False, comment="planning_application or scheme"
+    )
+    entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    value: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_maximum: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    is_approximate: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    alternative: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    component: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    is_additional: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    variation_from: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    quote: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    method: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="regex",
+        comment="regex, variation, sum, from_studios, ai, manual",
+    )
+    model: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    source: Mapped[str] = mapped_column(
+        String(100), nullable=False, comment="description, operator_page, planning_document"
+    )
+    source_reference: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    text_sha1: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    extracted_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_unit_extractions_entity", "entity_type", "entity_id", "kind"),
+        Index("ix_unit_extractions_sha", "text_sha1"),
     )
 
 
@@ -934,6 +1268,9 @@ class PipelineOpportunity(Base):
     __tablename__ = "pipeline_opportunities"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # title is NOT NULL in the live table; every creator must set it.
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(
         String(50), nullable=False, comment="planning_application, existing_scheme"
     )
@@ -961,6 +1298,7 @@ class PipelineOpportunity(Base):
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     last_contact_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
+    last_activity_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     next_action: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     next_action_date: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

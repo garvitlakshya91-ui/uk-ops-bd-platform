@@ -44,6 +44,8 @@ def backfill_schemes(db: Session, scorer: BDScorer) -> dict[str, int]:
         SELECT id FROM existing_schemes
         WHERE scheme_type IN ('BTR','PBSA','Senior','Co-living')
           AND (source IS NULL OR source NOT IN ('find_a_tender','contracts_finder'))
+          AND merged_into_id IS NULL
+          AND record_class NOT IN ('ingest_artefact', 'procurement_notice', 'listing_fragment')
         ORDER BY id
     """))]
     total = len(ids)

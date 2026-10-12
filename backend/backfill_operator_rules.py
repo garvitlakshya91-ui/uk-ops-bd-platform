@@ -1,5 +1,12 @@
 """Credit-free operator backfill (rules-based).
 
+SUPERSEDED by enrich_operators.py, which labels what each rule wrote and
+applies only the rules that hold up. Checked on 10 Oct 2026 against 1,292
+schemes whose operator a feed supplies: Rule 1 agreed 21% of the time,
+Rule 2 89%, Rule 3 98%, Rule 4 76%. This script writes without a source
+lock, so do not run Rules 1 or 4 from here again; its pattern lists are
+still imported by enrich_operators.py.
+
 Fills ``existing_schemes.operator_company_id`` for BD schemes using
 deterministic rules — no AI:
 

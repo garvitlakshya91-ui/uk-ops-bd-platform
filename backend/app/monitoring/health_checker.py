@@ -140,6 +140,7 @@ class ScraperHealthMonitor:
             .filter(
                 PlanningApplication.council_id == council_id,
                 PlanningApplication.created_at >= cutoff,
+                PlanningApplication.is_clone.is_(False),
             )
             .all()
         )
@@ -265,6 +266,7 @@ class ScraperHealthMonitor:
                 PlanningApplication.council_id == council_id,
                 PlanningApplication.created_at >= older_cutoff,
                 PlanningApplication.created_at < rolling_cutoff,
+                PlanningApplication.is_clone.is_(False),
             )
             .all()
         )

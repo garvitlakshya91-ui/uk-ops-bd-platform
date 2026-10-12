@@ -23,6 +23,8 @@ CPV codes of interest (same set as find_a_tender.py):
 from __future__ import annotations
 
 import re
+import time
+from collections.abc import AsyncIterator
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -70,7 +72,11 @@ HOUSING_CPV_CODES: set[str] = {
     "55100000", "55250000", "55200000",
 }
 
-# Search terms used to query the API -- covers housing, PBSA, BTR, co-living
+# Housing, PBSA, BTR and co-living phrases. The OCDS search endpoint ignores
+# its ``keyword`` parameter (verified 2026-10-11: any keyword, or none,
+# returns the identical newest-first feed), so these are never sent to the
+# API. They are kept for callers that pass ``search_terms`` to narrow the
+# feed client-side.
 SEARCH_TERMS: list[str] = [
     # Core housing
     "housing management",
@@ -110,9 +116,15 @@ SEARCH_TERMS: list[str] = [
     "concierge services residential",
 ]
 
-# Maximum pages to fetch per search term (100 results per page)
-DEFAULT_MAX_PAGES: int = 50
+# The feed runs at roughly 350 tender/award releases a day, so 14 days is
+# about 50 pages -- a couple of minutes at the 2s rate limit. Longer
+# back-fills pass ``published_from`` (and a higher ``max_pages``) explicitly.
+DEFAULT_LOOKBACK_DAYS: int = 14
+# Safety cap on pages per run (100 results per page)
+DEFAULT_MAX_PAGES: int = 200
 DEFAULT_PAGE_SIZE: int = 100
+# Pages gathered before iter_batches() hands a batch to the caller to save
+DEFAULT_BATCH_PAGES: int = 5
 
 
 class ContractsFinderScraper(BaseScraper):
@@ -142,6 +154,9 @@ class ContractsFinderScraper(BaseScraper):
             rate_limit=rate_limit,
             proxy_url=proxy_url,
         )
+        # True when the last run stopped before the end of the date window
+        # (time budget, page cap, or a page that failed after retries)
+        self.truncated: bool = False
 
     # ------------------------------------------------------------------
     # Search
@@ -159,110 +174,200 @@ class ContractsFinderScraper(BaseScraper):
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
         """
-        Search Contracts Finder for OCDS releases matching housing/FM
-        keywords.
+        Search Contracts Finder for housing-related OCDS releases.
 
-        Iterates over each search term, paginates through all results,
-        deduplicates by release ID, and filters to housing-related
-        notices only.
+        Walks the date window once, deduplicates by release ID, and
+        filters to housing-related notices only. Callers that need to
+        save as they go should use :meth:`iter_batches` instead.
 
         Args:
-            search_terms: Keywords to search for. Defaults to SEARCH_TERMS.
-            published_from: Earliest publication date. Defaults to 180 days ago.
+            search_terms: Optional phrases; when given, a release must also
+                contain one of them in its title/description. Applied
+                client-side -- the API ignores its keyword parameter.
+            published_from: Earliest publication date. Defaults to
+                DEFAULT_LOOKBACK_DAYS ago.
             published_to: Latest publication date. Defaults to today.
             stages: Comma-separated OCDS stages to include.
-            max_pages: Maximum pages to fetch per search term.
+            max_pages: Maximum pages to fetch.
             page_size: Number of results per page (max 100).
 
         Returns:
             List of raw OCDS release dicts that passed the housing filter.
         """
-        if search_terms is None:
-            search_terms = SEARCH_TERMS
-        if published_from is None:
-            published_from = date.today() - timedelta(days=1825)  # 5 years
-        if published_to is None:
-            published_to = date.today()
-
         all_results: list[dict[str, Any]] = []
-        seen_ids: set[str] = set()
-
-        for term in search_terms:
-            self.log.info("contracts_finder_search", term=term)
-            try:
-                releases = await self._search_term(
-                    term=term,
-                    published_from=published_from,
-                    published_to=published_to,
-                    stages=stages,
-                    max_pages=max_pages,
-                    page_size=page_size,
-                )
-                for release in releases:
-                    release_id = release.get("id", "")
-                    if not release_id or release_id in seen_ids:
-                        continue
-                    seen_ids.add(release_id)
-
-                    # Apply housing relevance filter
-                    if self._is_housing_related(release):
-                        all_results.append(release)
-                    else:
-                        self.log.debug(
-                            "release_filtered_non_housing",
-                            release_id=release_id,
-                        )
-            except Exception as exc:
-                self.metrics.record_error(
-                    exc, context=f"contracts_finder_search:{term}"
-                )
-                self.log.warning(
-                    "contracts_finder_search_failed",
-                    term=term,
-                    error=str(exc),
-                )
+        async for releases in self._iter_housing_releases(
+            search_terms=search_terms,
+            published_from=published_from,
+            published_to=published_to,
+            stages=stages,
+            max_pages=max_pages,
+            page_size=page_size,
+        ):
+            all_results.extend(releases)
 
         self.metrics.applications_found = len(all_results)
         self.log.info(
             "contracts_finder_search_complete",
             total_results=len(all_results),
-            unique_ids=len(seen_ids),
         )
         return all_results
 
-    async def _search_term(
+    async def iter_batches(
         self,
-        term: str,
+        *,
+        batch_pages: int = DEFAULT_BATCH_PAGES,
+        time_budget_seconds: float | None = None,
+        **search_kwargs: Any,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """
+        Yield normalised contract records every ``batch_pages`` pages so
+        the caller can persist each batch before the next is fetched. A
+        run that is cut short keeps everything yielded so far.
+
+        Args:
+            batch_pages: Pages to gather per batch.
+            time_budget_seconds: Stop fetching once this much time has
+                passed; ``self.truncated`` is then set.
+            **search_kwargs: Passed through to the search (see
+                :meth:`search_applications`).
+
+        Yields:
+            Lists of normalised contract dicts ready for persistence.
+        """
+        from app.scrapers.base import ScraperMetrics
+        self.metrics = ScraperMetrics()
+        self.truncated = False
+        self.log.info("scrape_start", source="contracts_finder")
+
+        deadline = (
+            time.monotonic() + time_budget_seconds
+            if time_budget_seconds is not None
+            else None
+        )
+        batch: list[dict[str, Any]] = []
+        pages_in_batch = 0
+
+        async for releases in self._iter_housing_releases(
+            deadline=deadline, **search_kwargs
+        ):
+            for release in releases:
+                release_id = release.get("id", "unknown")
+                try:
+                    batch.append(await self.parse_application(release))
+                    self.metrics.applications_found += 1
+                except Exception as exc:
+                    self.metrics.record_error(
+                        exc,
+                        context=f"parse:{release_id}",
+                    )
+                    self.log.warning(
+                        "parse_error",
+                        release_id=release_id,
+                        error=str(exc),
+                    )
+            pages_in_batch += 1
+            if pages_in_batch >= batch_pages:
+                yield batch
+                batch = []
+                pages_in_batch = 0
+
+        if batch:
+            yield batch
+
+        self.log.info(
+            "scrape_complete",
+            truncated=self.truncated,
+            **self.metrics.to_dict(),
+        )
+
+    async def _iter_housing_releases(
+        self,
+        *,
+        search_terms: list[str] | None = None,
+        published_from: date | None = None,
+        published_to: date | None = None,
+        stages: str = "tender,award",
+        max_pages: int = DEFAULT_MAX_PAGES,
+        page_size: int = DEFAULT_PAGE_SIZE,
+        deadline: float | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
+        """
+        Yield, page by page, the housing-related releases in the date
+        window that have not been seen on an earlier page.
+        """
+        if published_from is None:
+            published_from = date.today() - timedelta(days=DEFAULT_LOOKBACK_DAYS)
+        if published_to is None:
+            published_to = date.today()
+        terms = [t.lower() for t in search_terms] if search_terms else None
+
+        seen_ids: set[str] = set()
+        async for page_releases in self._iter_pages(
+            published_from=published_from,
+            published_to=published_to,
+            stages=stages,
+            max_pages=max_pages,
+            page_size=page_size,
+            deadline=deadline,
+        ):
+            matched: list[dict[str, Any]] = []
+            for release in page_releases:
+                release_id = release.get("id", "")
+                if not release_id or release_id in seen_ids:
+                    continue
+                seen_ids.add(release_id)
+
+                # Apply housing relevance filter
+                if not self._is_housing_related(release):
+                    self.log.debug(
+                        "release_filtered_non_housing",
+                        release_id=release_id,
+                    )
+                    continue
+                if terms is not None:
+                    tender = release.get("tender", {})
+                    text = (
+                        f"{tender.get('title', '')} "
+                        f"{tender.get('description', '')}"
+                    ).lower()
+                    if not any(t in text for t in terms):
+                        continue
+                matched.append(release)
+            yield matched
+
+    async def _iter_pages(
+        self,
         published_from: date,
         published_to: date,
         stages: str,
         max_pages: int,
         page_size: int,
-    ) -> list[dict[str, Any]]:
+        deadline: float | None = None,
+    ) -> AsyncIterator[list[dict[str, Any]]]:
         """
-        Paginate through Contracts Finder API results for a single
-        search term using cursor-based pagination.
+        Paginate once through the Contracts Finder feed for a date
+        window, newest first, using cursor-based pagination.
 
-        The CF OCDS API ignores the ``page`` parameter and uses
-        cursor-based pagination via ``links.next``.  Each response
-        contains up to 100 releases regardless of the ``size`` parameter.
+        The CF OCDS API ignores the ``page`` and ``keyword`` parameters
+        and uses cursor-based pagination via ``links.next``.  Each
+        response contains up to 100 releases regardless of the ``size``
+        parameter.
 
         Args:
-            term: Keyword to search for.
             published_from: Start of publication date range.
             published_to: End of publication date range.
             stages: OCDS stages filter (e.g. "tender,award").
             max_pages: Maximum number of pages to retrieve.
             page_size: Number of results per page (API always returns 100).
+            deadline: ``time.monotonic()`` value after which no further
+                page is requested.
 
-        Returns:
-            List of OCDS release dicts from all pages.
+        Yields:
+            The list of OCDS release dicts on each page.
         """
-        releases: list[dict[str, Any]] = []
-
         # First request uses query parameters
         params: dict[str, Any] = {
-            "keyword": term,
             "publishedFrom": published_from.strftime("%Y-%m-%d"),
             "publishedTo": published_to.strftime("%Y-%m-%d"),
             "stages": stages,
@@ -270,8 +375,17 @@ class ContractsFinderScraper(BaseScraper):
         }
         next_url: str | None = API_BASE_URL
         use_params = True
+        cumulative = 0
 
         for page in range(1, max_pages + 1):
+            if deadline is not None and time.monotonic() >= deadline:
+                self.truncated = True
+                self.log.warning(
+                    "contracts_finder_time_budget_reached",
+                    page=page,
+                    cumulative=cumulative,
+                )
+                return
             try:
                 if use_params:
                     resp = await self.fetch(
@@ -287,39 +401,43 @@ class ContractsFinderScraper(BaseScraper):
                     )
                 data = resp.json()
             except Exception as exc:
+                self.truncated = True
                 self.log.warning(
                     "contracts_finder_page_error",
-                    term=term,
                     page=page,
                     error=str(exc),
                 )
-                break
+                return
 
             page_releases = data.get("releases", [])
             if not page_releases:
                 self.log.debug(
                     "contracts_finder_no_more_results",
-                    term=term,
                     page=page,
                 )
-                break
+                return
 
-            releases.extend(page_releases)
+            cumulative += len(page_releases)
             self.log.info(
                 "contracts_finder_page",
-                term=term,
                 page=page,
                 count=len(page_releases),
-                cumulative=len(releases),
+                cumulative=cumulative,
             )
+            yield page_releases
 
             # Follow cursor-based pagination via links.next
             next_url = (data.get("links") or {}).get("next")
             if not next_url:
-                break
+                return
             use_params = False
 
-        return releases
+        self.truncated = True
+        self.log.warning(
+            "contracts_finder_max_pages_reached",
+            max_pages=max_pages,
+            cumulative=cumulative,
+        )
 
     # ------------------------------------------------------------------
     # Housing relevance filter
@@ -638,50 +756,16 @@ class ContractsFinderScraper(BaseScraper):
 
         Overrides the base ``run()`` method because the Contracts Finder
         API returns all needed data in the search response (no separate
-        detail fetch is required).
+        detail fetch is required). Everything is held in memory until the
+        end; long-running callers should use :meth:`iter_batches`.
 
         Args:
-            **search_kwargs: Passed through to ``search_applications``.
+            **search_kwargs: Passed through to ``iter_batches``.
 
         Returns:
             List of normalised contract dicts ready for persistence.
         """
-        self.log.info("scrape_start", source="contracts_finder")
-        from app.scrapers.base import ScraperMetrics
-        self.metrics = ScraperMetrics()
-
         results: list[dict[str, Any]] = []
-        try:
-            raw_releases = await self.search_applications(**search_kwargs)
-            self.log.info(
-                "search_complete",
-                results_count=len(raw_releases),
-            )
-
-            for release in raw_releases:
-                release_id = release.get("id", "unknown")
-                try:
-                    parsed = await self.parse_application(release)
-                    results.append(parsed)
-                except Exception as exc:
-                    self.metrics.record_error(
-                        exc,
-                        context=f"parse:{release_id}",
-                    )
-                    self.log.warning(
-                        "parse_error",
-                        release_id=release_id,
-                        error=str(exc),
-                    )
-
-        except Exception as exc:
-            self.metrics.record_error(exc, context="search_applications")
-            self.log.error("scrape_failed", error=str(exc))
-            raise
-
-        self.metrics.applications_found = len(results)
-        self.log.info(
-            "scrape_complete",
-            **self.metrics.to_dict(),
-        )
+        async for batch in self.iter_batches(**search_kwargs):
+            results.extend(batch)
         return results

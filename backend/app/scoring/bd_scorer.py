@@ -29,6 +29,7 @@ from app.models.models import (
     PlanningApplication,
     ScraperRun,
 )
+from app.registry.core import reportable_filters
 
 logger = structlog.get_logger(__name__)
 
@@ -285,7 +286,10 @@ class BDScorer:
 
         count = (
             self._db.query(sa_func.count(PlanningApplication.id))
-            .filter(PlanningApplication.applicant_company_id == company_id)
+            .filter(
+                PlanningApplication.applicant_company_id == company_id,
+                PlanningApplication.is_clone.is_(False),
+            )
             .scalar()
         ) or 0
 
@@ -438,14 +442,18 @@ class BDScorer:
             self._db.query(sa_func.count(ExistingScheme.id))
             .filter(
                 (ExistingScheme.operator_company_id == company.id)
-                | (ExistingScheme.owner_company_id == company.id)
+                | (ExistingScheme.owner_company_id == company.id),
+                *reportable_filters(),
             )
             .scalar()
         ) or 0
 
         app_count = (
             self._db.query(sa_func.count(PlanningApplication.id))
-            .filter(PlanningApplication.applicant_company_id == company.id)
+            .filter(
+                PlanningApplication.applicant_company_id == company.id,
+                PlanningApplication.is_clone.is_(False),
+            )
             .scalar()
         ) or 0
 
@@ -472,6 +480,7 @@ class BDScorer:
             .filter(
                 PlanningApplication.applicant_company_id == company.id,
                 PlanningApplication.submission_date >= twelve_months_ago,
+                PlanningApplication.is_clone.is_(False),
             )
             .scalar()
         ) or 0
@@ -482,6 +491,7 @@ class BDScorer:
                 PlanningApplication.applicant_company_id == company.id,
                 PlanningApplication.submission_date >= twenty_four_months_ago,
                 PlanningApplication.submission_date < twelve_months_ago,
+                PlanningApplication.is_clone.is_(False),
             )
             .scalar()
         ) or 0
@@ -626,7 +636,7 @@ class BDScorer:
                 PlanningApplication.scheme_type,
                 sa_func.count(PlanningApplication.id),
             )
-            .filter(PlanningApplication.created_at >= week_ago)
+            .filter(PlanningApplication.created_at >= week_ago, PlanningApplication.is_clone.is_(False))
             .group_by(PlanningApplication.scheme_type)
             .all()
         )
@@ -647,6 +657,7 @@ class BDScorer:
                     ExistingScheme.contract_end_date.isnot(None),
                     ExistingScheme.contract_end_date <= deadline,
                     ExistingScheme.contract_end_date >= today,
+                    *reportable_filters(),
                 )
                 .order_by(ExistingScheme.contract_end_date)
                 .all()
@@ -658,7 +669,7 @@ class BDScorer:
                     "id": s.id,
                     "name": s.name,
                     "contract_end_date": str(s.contract_end_date),
-                    "num_units": s.num_units,
+                    "num_units": s.unit_count,
                 }
                 for s in _expiring_query(three_months)
             ],
@@ -667,7 +678,7 @@ class BDScorer:
                     "id": s.id,
                     "name": s.name,
                     "contract_end_date": str(s.contract_end_date),
-                    "num_units": s.num_units,
+                    "num_units": s.unit_count,
                 }
                 for s in _expiring_query(six_months)
             ],
@@ -676,7 +687,7 @@ class BDScorer:
                     "id": s.id,
                     "name": s.name,
                     "contract_end_date": str(s.contract_end_date),
-                    "num_units": s.num_units,
+                    "num_units": s.unit_count,
                 }
                 for s in _expiring_query(twelve_months)
             ],
@@ -707,7 +718,7 @@ class BDScorer:
         # Score changes — recalculate for all existing schemes and note
         # those where the score differs significantly from stored value.
         score_changes: list[dict[str, Any]] = []
-        schemes = self._db.query(ExistingScheme).all()
+        schemes = self._db.query(ExistingScheme).filter(*reportable_filters()).all()
         for scheme in schemes:
             new_score = self.score_existing_scheme(scheme)
             # Check if there is a linked pipeline opportunity with a stored score.

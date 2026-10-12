@@ -88,9 +88,15 @@ def enrich_company(self, company_id: int) -> dict[str, Any]:
         # 1. Companies House enrichment.
         if not company.companies_house_number:
             try:
-                enricher = CompaniesHouseEnricher()
-                ch_data = _run_async(enricher.enrich_company(company.name))
-                _run_async(enricher.close())
+                # Lookup and close share one event loop (see enrich_company_psc).
+                async def _lookup_company() -> dict[str, Any] | None:
+                    enricher = CompaniesHouseEnricher()
+                    try:
+                        return await enricher.enrich_company(company.name)
+                    finally:
+                        await enricher.close()
+
+                ch_data = _run_async(_lookup_company())
 
                 if ch_data:
                     company.companies_house_number = ch_data.get("companies_house_number")
@@ -191,39 +197,6 @@ def enrich_new_applications() -> dict[str, Any]:
 
         logger.info("enrich_new_applications_found", count=len(unlinked))
 
-        ch_enricher = CompaniesHouseEnricher()
-        matcher = CompanyMatcher(db_session=db, ch_enricher=ch_enricher)
-
-        matched = 0
-        created = 0
-        errors = 0
-
-        for app in unlinked:
-            try:
-                company = _run_async(
-                    matcher.match_or_create(app.applicant_name, source="planning_scraper")
-                )
-                app.applicant_company_id = company.id
-                db.commit()
-
-                # Trigger enrichment for new companies.
-                if company.companies_house_number is None:
-                    enrich_company.delay(company.id)
-                    created += 1
-                else:
-                    matched += 1
-
-            except Exception:
-                logger.exception(
-                    "enrich_application_matching_failed",
-                    application_id=app.id,
-                    applicant_name=app.applicant_name,
-                )
-                errors += 1
-                db.rollback()
-
-        _run_async(ch_enricher.close())
-
         # Also handle agent names (same individual-name skip).
         unlinked_agents = (
             db.query(PlanningApplication)
@@ -238,22 +211,63 @@ def enrich_new_applications() -> dict[str, Any]:
             .all()
         )
 
-        agent_matched = 0
-        for app in unlinked_agents:
+        # All matching and the final close share one event loop: the CH
+        # enricher's HTTP client is bound to the loop it was opened on, and
+        # each _run_async call starts a new one.
+        async def _match_all() -> tuple[int, int, int, int]:
+            matched = 0
+            created = 0
+            errors = 0
+            agent_matched = 0
+
+            ch_enricher = CompaniesHouseEnricher()
+            matcher = CompanyMatcher(db_session=db, ch_enricher=ch_enricher)
             try:
-                company = _run_async(
-                    matcher.match_or_create(app.agent_name, source="planning_scraper")
-                )
-                app.agent_company_id = company.id
-                db.commit()
-                agent_matched += 1
-            except Exception:
-                logger.exception(
-                    "enrich_agent_matching_failed",
-                    application_id=app.id,
-                    agent_name=app.agent_name,
-                )
-                db.rollback()
+                for app in unlinked:
+                    try:
+                        company = await matcher.match_or_create(
+                            app.applicant_name, source="planning_scraper"
+                        )
+                        app.applicant_company_id = company.id
+                        db.commit()
+
+                        # Trigger enrichment for new companies.
+                        if company.companies_house_number is None:
+                            enrich_company.delay(company.id)
+                            created += 1
+                        else:
+                            matched += 1
+
+                    except Exception:
+                        logger.exception(
+                            "enrich_application_matching_failed",
+                            application_id=app.id,
+                            applicant_name=app.applicant_name,
+                        )
+                        errors += 1
+                        db.rollback()
+
+                for app in unlinked_agents:
+                    try:
+                        company = await matcher.match_or_create(
+                            app.agent_name, source="planning_scraper"
+                        )
+                        app.agent_company_id = company.id
+                        db.commit()
+                        agent_matched += 1
+                    except Exception:
+                        logger.exception(
+                            "enrich_agent_matching_failed",
+                            application_id=app.id,
+                            agent_name=app.agent_name,
+                        )
+                        db.rollback()
+
+                return matched, created, errors, agent_matched
+            finally:
+                await ch_enricher.close()
+
+        matched, created, errors, agent_matched = _run_async(_match_all())
 
         result = {
             "processed": len(unlinked),
@@ -314,11 +328,25 @@ def enrich_company_psc(self, company_id: int) -> dict[str, Any]:
         )
         log.info("enrich_company_psc_started")
 
-        enricher = CompaniesHouseEnricher()
-        chain = _run_async(
-            enricher.resolve_ultimate_owner(company.companies_house_number)
-        )
-        _run_async(enricher.close())
+        # The lookup and the close share one event loop: the HTTP client is
+        # bound to the loop it was opened on, and each _run_async call starts
+        # a new one.
+        async def _resolve_chain() -> list[dict[str, Any]]:
+            enricher = CompaniesHouseEnricher()
+            try:
+                return await enricher.resolve_ultimate_owner(
+                    company.companies_house_number
+                )
+            finally:
+                await enricher.close()
+
+        chain = _run_async(_resolve_chain())
+
+        # Mark the company as looked at, chain or no chain, so the
+        # oldest-first batch in enrich_all_companies_psc moves on to others
+        # instead of re-dispatching the same parentless companies every run.
+        company.updated_at = datetime.datetime.now(datetime.timezone.utc)
+        db.commit()
 
         if not chain:
             log.info("enrich_company_psc_no_chain")
@@ -409,38 +437,88 @@ def enrich_company_psc(self, company_id: int) -> dict[str, Any]:
     name="app.tasks.enrichment_tasks.enrich_all_companies_psc",
     acks_late=True,
 )
-def enrich_all_companies_psc() -> dict[str, Any]:
-    """Dispatch PSC enrichment for all companies that have a CH number
-    but no parent company linked yet.
+def enrich_all_companies_psc(batch_size: int = 200) -> dict[str, Any]:
+    """Dispatch PSC enrichment for companies that have a CH number but no
+    parent company linked yet, scheme-linked companies first.
 
-    Designed to run weekly via Celery Beat.  Batches to avoid overwhelming
-    the Companies House rate limit (600 req/5 min).
+    Each run's batch is filled in priority order, oldest-checked first
+    within a tier:
+
+    1. ``real_scheme``  - operator or owner of a real scheme (half the batch)
+    2. ``other_scheme`` - operator or owner of any other scheme row, mostly
+       EPC development clusters (30% of the batch)
+    3. ``unlinked``     - everything else, mostly Land Registry title holders
+
+    A tier that cannot fill its share passes the remainder down, so the
+    lower tiers keep moving and nothing is starved. ``enrich_company_psc``
+    bumps ``updated_at`` when it finishes, which rotates each tier.
+
+    Designed to run every 6 hours via Celery Beat.  Batches to avoid
+    overwhelming the Companies House rate limit (600 req/5 min).
     """
     db = _get_db()
     try:
-        from app.models.models import Company
+        from sqlalchemy import select
 
-        candidates = (
-            db.query(Company.id)
-            .filter(
-                Company.companies_house_number.isnot(None),
-                Company.companies_house_number != "",
-                Company.parent_company_id.is_(None),
+        from app.models.models import Company, ExistingScheme
+        from app.registry.core import reportable_filters
+
+        def _linked_company_ids(*conditions):
+            return select(ExistingScheme.operator_company_id).where(
+                ExistingScheme.operator_company_id.isnot(None), *conditions
+            ).union(
+                select(ExistingScheme.owner_company_id).where(
+                    ExistingScheme.owner_company_id.isnot(None), *conditions
+                )
             )
-            .order_by(Company.updated_at.asc())
-            .limit(200)  # Cap per run; rate-limiter handles the rest.
-            .all()
-        )
 
-        if not candidates:
+        real_scheme_ids = _linked_company_ids(*reportable_filters())
+        any_scheme_ids = _linked_company_ids()
+
+        tiers = [
+            ("real_scheme", batch_size // 2, (Company.id.in_(real_scheme_ids),)),
+            (
+                "other_scheme",
+                batch_size * 3 // 10,
+                (Company.id.in_(any_scheme_ids), Company.id.notin_(real_scheme_ids)),
+            ),
+            ("unlinked", batch_size, (Company.id.notin_(any_scheme_ids),)),
+        ]
+
+        picked: list[int] = []
+        by_tier: dict[str, int] = {}
+        carry = 0
+        for tier_name, share, conditions in tiers:
+            quota = min(share + carry, batch_size - len(picked))
+            if quota <= 0:
+                by_tier[tier_name] = 0
+                continue
+            rows = (
+                db.query(Company.id)
+                .filter(
+                    Company.companies_house_number.isnot(None),
+                    Company.companies_house_number != "",
+                    Company.parent_company_id.is_(None),
+                    Company.merged_into_id.is_(None),
+                    *conditions,
+                )
+                .order_by(Company.updated_at.asc())
+                .limit(quota)
+                .all()
+            )
+            picked.extend(cid for (cid,) in rows)
+            by_tier[tier_name] = len(rows)
+            carry = quota - len(rows)
+
+        if not picked:
             logger.info("enrich_all_companies_psc_none_found")
             return {"dispatched": 0}
 
-        for (cid,) in candidates:
+        for cid in picked:
             enrich_company_psc.delay(cid)
 
-        logger.info("enrich_all_companies_psc_dispatched", count=len(candidates))
-        return {"dispatched": len(candidates)}
+        logger.info("enrich_all_companies_psc_dispatched", count=len(picked), **by_tier)
+        return {"dispatched": len(picked), **by_tier}
 
     finally:
         db.close()
@@ -617,8 +695,9 @@ def enrich_schemes_with_epc() -> dict[str, Any]:
     """Fetch EPC rating distributions for ExistingScheme records that have a
     postcode but no epc_ratings yet.
 
-    Processes in batches of 50 to respect the EPC API rate limits.
-    Designed to run weekly via Celery Beat.
+    Processes in batches of 500, well inside the register's rate limit.
+    Designed to run every 6 hours via Celery Beat. Fails if the register cannot be
+    reached or the bearer token is missing or rejected.
 
     Returns
     -------
@@ -628,6 +707,7 @@ def enrich_schemes_with_epc() -> dict[str, Any]:
     db = _get_db()
     try:
         from app.models.models import ExistingScheme
+        from app.scrapers.epc_client import EPCApiError
         from app.scrapers.epc_scraper import EPCScraper
 
         schemes = (
@@ -638,7 +718,7 @@ def enrich_schemes_with_epc() -> dict[str, Any]:
                 ExistingScheme.epc_ratings.is_(None),
             )
             .order_by(ExistingScheme.updated_at.asc())
-            .limit(50)
+            .limit(500)
             .all()
         )
 
@@ -648,40 +728,44 @@ def enrich_schemes_with_epc() -> dict[str, Any]:
 
         logger.info("enrich_schemes_with_epc_found", count=len(schemes))
 
-        scraper = EPCScraper()
-        enriched = 0
-        errors = 0
+        async def _enrich() -> tuple[int, int]:
+            enriched = 0
+            errors = 0
+            async with EPCScraper() as scraper:
+                for scheme in schemes:
+                    try:
+                        epc_data = await scraper.get_rating_distribution(
+                            postcode=scheme.postcode
+                        )
+                        if epc_data and epc_data.get("ratings"):
+                            scheme.epc_ratings = epc_data
+                            db.commit()
+                            enriched += 1
+                            logger.debug(
+                                "enrich_scheme_epc_done",
+                                scheme_id=scheme.id,
+                                postcode=scheme.postcode,
+                            )
+                        else:
+                            # Mark as checked so we don't re-query every run.
+                            scheme.epc_ratings = {"ratings": {}, "total": 0, "checked": True}
+                            db.commit()
+                    except EPCApiError:
+                        # The register is not answering. Stop here: a scheme
+                        # must never be marked as checked on a failed lookup.
+                        db.rollback()
+                        raise
+                    except Exception:
+                        logger.exception(
+                            "enrich_scheme_epc_failed",
+                            scheme_id=scheme.id,
+                            postcode=scheme.postcode,
+                        )
+                        errors += 1
+                        db.rollback()
+            return enriched, errors
 
-        for scheme in schemes:
-            try:
-                epc_data = _run_async(
-                    scraper.get_rating_distribution(postcode=scheme.postcode)
-                )
-                if epc_data and epc_data.get("ratings"):
-                    scheme.epc_ratings = epc_data
-                    db.commit()
-                    enriched += 1
-                    logger.debug(
-                        "enrich_scheme_epc_done",
-                        scheme_id=scheme.id,
-                        postcode=scheme.postcode,
-                    )
-                else:
-                    # Mark as checked so we don't re-query every run.
-                    scheme.epc_ratings = {"ratings": {}, "total": 0, "checked": True}
-                    db.commit()
-            except Exception:
-                logger.exception(
-                    "enrich_scheme_epc_failed",
-                    scheme_id=scheme.id,
-                    postcode=scheme.postcode,
-                )
-                errors += 1
-                db.rollback()
-
-        # Clean up scraper session if it was initialised.
-        if hasattr(scraper, "session") and scraper.session:
-            _run_async(scraper.session.aclose())
+        enriched, errors = _run_async(_enrich())
 
         result = {"processed": len(schemes), "enriched": enriched, "errors": errors}
         logger.info("enrich_schemes_with_epc_completed", **result)
@@ -835,6 +919,10 @@ def cross_reference_planning_to_schemes() -> dict[str, Any]:
                         )
                         if not existing_opp and app.applicant_company_id:
                             opp = PipelineOpportunity(
+                                title=(
+                                    f"Planning near expiring contract: "
+                                    f"{scheme.name}"
+                                )[:500],
                                 source="planning_application",
                                 planning_application_id=app.id,
                                 scheme_id=scheme.id,
@@ -1075,44 +1163,52 @@ def enrich_companies_charity_status() -> dict[str, Any]:
             logger.info("enrich_charity_status_none_found")
             return {"checked": 0, "charities_found": 0}
 
-        client = CharityCommissionClient()
-        charities_found = 0
-        errors = 0
-
-        for company in candidates:
+        # All lookups and the final close share one event loop: the HTTP
+        # client is bound to the loop it was opened on, and each _run_async
+        # call starts a new one.
+        async def _check_all() -> tuple[int, int]:
+            charities_found = 0
+            errors = 0
+            client = CharityCommissionClient()
             try:
-                # Skip if already has charity info
-                sic = company.sic_codes or {}
-                if isinstance(sic, dict) and sic.get("charity_number"):
-                    continue
+                for company in candidates:
+                    try:
+                        # Skip if already has charity info
+                        sic = company.sic_codes or {}
+                        if isinstance(sic, dict) and sic.get("charity_number"):
+                            continue
 
-                result = _run_async(client.is_registered_charity(company.name))
+                        result = await client.is_registered_charity(company.name)
 
-                if result:
-                    existing_sic = dict(company.sic_codes or {})
-                    existing_sic["charity_number"] = result.get("charity_number", "")
-                    existing_sic["charity_income"] = result.get("income")
-                    existing_sic["charity_trustees"] = result.get("trustees", [])[:5]
-                    company.sic_codes = existing_sic
-                    db.commit()
-                    charities_found += 1
-                    logger.info(
-                        "charity_status_found",
-                        company_id=company.id,
-                        company_name=company.name,
-                        charity_number=result.get("charity_number"),
-                    )
+                        if result:
+                            existing_sic = dict(company.sic_codes or {})
+                            existing_sic["charity_number"] = result.get("charity_number", "")
+                            existing_sic["charity_income"] = result.get("income")
+                            existing_sic["charity_trustees"] = result.get("trustees", [])[:5]
+                            company.sic_codes = existing_sic
+                            db.commit()
+                            charities_found += 1
+                            logger.info(
+                                "charity_status_found",
+                                company_id=company.id,
+                                company_name=company.name,
+                                charity_number=result.get("charity_number"),
+                            )
 
-            except Exception as exc:
-                logger.warning(
-                    "charity_enrichment_failed",
-                    company_id=company.id,
-                    error=str(exc),
-                )
-                errors += 1
-                db.rollback()
+                    except Exception as exc:
+                        logger.warning(
+                            "charity_enrichment_failed",
+                            company_id=company.id,
+                            error=str(exc),
+                        )
+                        errors += 1
+                        db.rollback()
 
-        _run_async(client.close())
+                return charities_found, errors
+            finally:
+                await client.close()
+
+        charities_found, errors = _run_async(_check_all())
 
         result_summary = {
             "checked": len(candidates),
@@ -1155,6 +1251,17 @@ def backfill_contract_dates_cf_awards() -> dict[str, Any]:
     try:
         from app.models.models import ExistingScheme, SchemeContract
 
+        # The search and the client close share one event loop. The scraper
+        # has no close(); leaving the context manager closes its session.
+        async def _fetch_award_releases() -> list[dict[str, Any]]:
+            from app.scrapers.contracts_finder import ContractsFinderScraper
+
+            async with ContractsFinderScraper() as scraper:
+                return await scraper.search_applications(
+                    stages="award",
+                    max_pages=100,
+                )
+
         # ---- Phase A: Direct match for contracts_finder-sourced contracts ----
         cf_contracts = (
             db.query(SchemeContract)
@@ -1183,8 +1290,6 @@ def backfill_contract_dates_cf_awards() -> dict[str, Any]:
                 SEARCH_TERMS,
             )
 
-            scraper = ContractsFinderScraper()
-
             # Group contracts by their base OCID for batch lookup
             ref_to_contracts: dict[str, list] = {}
             for c in cf_contracts:
@@ -1196,12 +1301,7 @@ def backfill_contract_dates_cf_awards() -> dict[str, Any]:
             # Search for award-stage releases matching these contracts
             # We search in batches using the contract titles as keywords
             try:
-                award_releases = _run_async(
-                    scraper.search_applications(
-                        stages="award",
-                        max_pages=100,
-                    )
-                )
+                award_releases = _run_async(_fetch_award_releases())
 
                 logger.info(
                     "backfill_cf_awards_fetched",
@@ -1275,11 +1375,6 @@ def backfill_contract_dates_cf_awards() -> dict[str, Any]:
                 logger.exception("backfill_cf_awards_search_failed")
                 phase_a_errors += 1
 
-            try:
-                _run_async(scraper.close())
-            except Exception:
-                pass
-
         # ---- Phase B: Title-based fuzzy match for FAT contracts ----
         fat_contracts = (
             db.query(SchemeContract)
@@ -1302,14 +1397,10 @@ def backfill_contract_dates_cf_awards() -> dict[str, Any]:
         if fat_contracts:
             from app.scrapers.contracts_finder import ContractsFinderScraper
 
-            scraper = ContractsFinderScraper()
-
             # Build title index from award releases (reuse if available)
             try:
                 if not cf_contracts or 'award_releases' not in dir():
-                    award_releases = _run_async(
-                        scraper.search_applications(stages="award", max_pages=100)
-                    )
+                    award_releases = _run_async(_fetch_award_releases())
 
                 # Build a lookup by normalised title for fuzzy matching
                 import unicodedata
@@ -1378,11 +1469,6 @@ def backfill_contract_dates_cf_awards() -> dict[str, Any]:
             except Exception:
                 logger.exception("backfill_cf_awards_phase_b_search_failed")
                 phase_b_errors += 1
-
-            try:
-                _run_async(scraper.close())
-            except Exception:
-                pass
 
         result = {
             "cf_contracts_scanned": len(cf_contracts),
@@ -2200,7 +2286,7 @@ def enrich_google_reviews(
         )
         if council_filter:
             q = q.filter(Council.name.in_(council_filter))
-        q = q.order_by(ExistingScheme.num_units.desc().nullslast()).limit(limit)
+        q = q.order_by(ExistingScheme.unit_count.desc().nullslast()).limit(limit)
         schemes = q.all()
 
         logger.info(
@@ -2292,7 +2378,7 @@ def enrich_arrears_risk(limit: int = 200) -> dict[str, Any]:
                     ExistingScheme.arrears_checked_at < cutoff,
                 )
             )
-            .order_by(ExistingScheme.num_units.desc().nullslast())
+            .order_by(ExistingScheme.unit_count.desc().nullslast())
             .limit(limit)
             .all()
         )

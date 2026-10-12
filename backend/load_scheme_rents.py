@@ -1,4 +1,4 @@
-"""Load already-scraped rents into ``scheme_rents`` (rent backfill).
+"""Load already-scraped rents into ``scheme_advertised_rents`` (rent backfill).
 
 The AFS, operator-directory and StuRents scrapers captured advertised
 rents. Those records that became schemes carry the listing URL in
@@ -8,7 +8,8 @@ the scheme it actually belongs to. Market-comparable HMO listings that
 never became schemes simply don't match (correct).
 
 Rents are normalised to per-week and per-month. Ranges (min/max) become
-two rows ("From" / "To"); single advertised rents become one row.
+two rows (kind 'from' / 'to'); single advertised rents become one row
+(kind 'advertised').
 
 Re-runnable: supersedes (is_current = false) the three source labels it
 owns, then inserts fresh rows — prior observations are kept as history.
@@ -29,11 +30,11 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
-DB_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/uk_ops_bd"
-)
+from app.database import SessionLocal
+from app.models.models import SchemeAdvertisedRent
+from app.models.rents import record_advertised_rent, supersede
 
 PPW_TO_PCM = 52.0 / 12.0  # weeks/year ÷ months/year
 
@@ -64,8 +65,8 @@ def rows_afs(d: dict):
         weeks = max(wks)
     ay = ((d.get("raw") or {}).get("academicYearLabel")) or None
     yield {
-        "room_type": "Advertised", "rent_per_week": ppw,
-        "rent_per_month": round(ppw * PPW_TO_PCM, 2),
+        "kind": "advertised", "rent_ppw": ppw,
+        "rent_pcm": round(ppw * PPW_TO_PCM, 2),
         "academic_year": ay, "contract_length_weeks": weeks,
     }
 
@@ -76,12 +77,12 @@ def rows_op(d: dict):
     if not lo and not hi:
         return
     if lo:
-        yield {"room_type": "From", "rent_per_week": lo,
-               "rent_per_month": round(lo * PPW_TO_PCM, 2),
+        yield {"kind": "from", "rent_ppw": lo,
+               "rent_pcm": round(lo * PPW_TO_PCM, 2),
                "academic_year": None, "contract_length_weeks": None}
     if hi and hi != lo:
-        yield {"room_type": "To", "rent_per_week": hi,
-               "rent_per_month": round(hi * PPW_TO_PCM, 2),
+        yield {"kind": "to", "rent_ppw": hi,
+               "rent_pcm": round(hi * PPW_TO_PCM, 2),
                "academic_year": None, "contract_length_weeks": None}
 
 
@@ -93,12 +94,12 @@ def rows_st(d: dict):
     if not lo and not hi and not pcm:
         return
     if lo:
-        yield {"room_type": "From", "rent_per_week": lo,
-               "rent_per_month": pcm or round(lo * PPW_TO_PCM, 2),
+        yield {"kind": "from", "rent_ppw": lo,
+               "rent_pcm": pcm or round(lo * PPW_TO_PCM, 2),
                "academic_year": None, "contract_length_weeks": weeks}
     if hi and hi != lo:
-        yield {"room_type": "To", "rent_per_week": hi,
-               "rent_per_month": round(hi * PPW_TO_PCM, 2),
+        yield {"kind": "to", "rent_ppw": hi,
+               "rent_pcm": round(hi * PPW_TO_PCM, 2),
                "academic_year": None, "contract_length_weeks": weeks}
 
 
@@ -117,17 +118,19 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    engine = create_engine(DB_URL)
-    with engine.connect() as c:
-        ref2id = dict(c.execute(text(
+    db = SessionLocal()
+    try:
+        ref2id = dict(db.execute(text(
             "SELECT source_reference, id FROM existing_schemes "
             "WHERE source_reference IS NOT NULL")).fetchall())
         pc2schemes: dict[str, list] = {}
-        for sid, nm, pck in c.execute(text("""
+        for sid, nm, pck in db.execute(text("""
             SELECT id, name, REPLACE(UPPER(COALESCE(postcode,'')),' ','')
             FROM existing_schemes WHERE COALESCE(postcode,'') <> ''
         """)).fetchall():
             pc2schemes.setdefault(pck, []).append((sid, nm))
+    finally:
+        db.close()
     print(f"{len(ref2id):,} schemes carry a source URL\n")
 
     def _toks(s):
@@ -194,36 +197,33 @@ def main():
     if args.dry_run:
         print("\n[dry-run] sample:")
         for p in payload[:8]:
-            print(f"   #{p['scheme_id']} [{p['source']}] {p['room_type']:>9} "
-                  f"£{p['rent_per_week']}/wk  £{p['rent_per_month']}/mo")
+            print(f"   #{p['scheme_id']} [{p['source']}] {p['kind']:>10} "
+                  f"£{p['rent_ppw']}/wk  £{p['rent_pcm']}/mo")
         return
 
-    with engine.begin() as c:
+    db = SessionLocal()
+    try:
         # Append-only: supersede, never delete — history is the product.
-        c.execute(text("""
-            UPDATE scheme_rents SET is_current = FALSE, superseded_at = NOW()
-            WHERE is_current AND source IN (:a,:b,:d)
-        """), {"a": AFS, "b": OP, "d": ST})
+        supersede(db, SchemeAdvertisedRent, [AFS, OP, ST])
         for p in payload:
-            c.execute(text("""
-                INSERT INTO scheme_rents
-                    (scheme_id, room_type, rent_per_week, rent_per_month,
-                     currency, academic_year, contract_length_weeks,
-                     source, source_reference, scraped_at, created_at)
-                VALUES (:scheme_id, :room_type, :rent_per_week, :rent_per_month,
-                     'GBP', :academic_year, :contract_length_weeks,
-                     :source, :source_reference, NOW(), NOW())
-            """), p)
-    print(f"\nLoaded {len(payload):,} rent rows for {len(by_scheme):,} schemes.")
+            record_advertised_rent(db, **p)
+        db.commit()
+        print(f"\nLoaded {len(payload):,} rent rows for {len(by_scheme):,} schemes.")
 
-    with engine.connect() as c:
-        tot = c.execute(text(
-            "SELECT COUNT(DISTINCT scheme_id) FROM scheme_rents")).scalar()
-        bd = c.execute(text("""
-            SELECT COUNT(DISTINCT sr.scheme_id) FROM scheme_rents sr
-            JOIN existing_schemes es ON es.id = sr.scheme_id
+        tot = db.execute(text("""
+            SELECT COUNT(DISTINCT scheme_id) FROM (
+                SELECT scheme_id FROM scheme_advertised_rents
+                UNION SELECT scheme_id FROM scheme_room_rents) r
+        """)).scalar()
+        bd = db.execute(text("""
+            SELECT COUNT(DISTINCT r.scheme_id) FROM (
+                SELECT scheme_id FROM scheme_advertised_rents
+                UNION SELECT scheme_id FROM scheme_room_rents) r
+            JOIN existing_schemes es ON es.id = r.scheme_id
             WHERE es.scheme_type IN ('BTR','PBSA','Co-living','Senior')
         """)).scalar()
+    finally:
+        db.close()
     print(f"Total schemes with rents now: {tot:,}  (BD: {bd:,})")
 
 

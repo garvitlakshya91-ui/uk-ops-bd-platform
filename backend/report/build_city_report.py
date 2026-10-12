@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from jinja2 import Environment, FileSystemLoader
 
 from app.database import SessionLocal
+from report.gates import run_gates
 from report.queries import gather_city_context
 
 TEMPLATE_DIR = Path(__file__).parent
@@ -59,11 +60,27 @@ def main() -> None:
     ap.add_argument("--publication", action="store_true",
                     help="Only publishable (own-sourced) figures; benchmark-only "
                          "values are excluded and reported as coverage gaps")
+    ap.add_argument("--ignore-gates", action="store_true",
+                    help="Build a publication draft even when a publish gate fails "
+                         "(the failures are printed and listed in the annex)")
     args = ap.parse_args()
 
     db = SessionLocal()
     context = gather_city_context(db, args.council, publication=args.publication)
     db.close()
+
+    # Publish gates: a publication build refuses to exist with a failing
+    # check; an internal build prints them and carries them in the annex.
+    failures = run_gates(context)
+    context["gate_failures"] = [{"gate": f.gate, "message": f.message, "detail": f.detail} for f in failures]
+    if failures:
+        print(f"{len(failures)} publish gate(s) failed:")
+        for f in failures:
+            print(str(f))
+        if args.publication and not args.ignore_gates:
+            raise SystemExit(2)
+    else:
+        print("publish gates: all passed")
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -71,7 +88,7 @@ def main() -> None:
     slug = context["city"].lower().replace(" ", "_")
     suffix = "_publication" if args.publication else ""
     html_path = out_dir / f"{slug}_pbsa_report_{stamp}{suffix}.html"
-    html_path.write_text(render_html(context))
+    html_path.write_text(render_html(context), encoding="utf-8")
     print(f"HTML -> {html_path}")
 
     if not args.no_pdf:

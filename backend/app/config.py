@@ -49,8 +49,10 @@ class Settings(BaseSettings):
     # Anthropic (Claude AI)
     ANTHROPIC_API_KEY: str = ""
 
-    # EPC Open Data Communities API
-    EPC_API_KEY: str = ""  # Register at https://epc.opendatacommunities.org/
+    # Energy Performance of Buildings Data API (replaced epc.opendatacommunities.org).
+    # Bearer token from the account page after signing in with GOV.UK One Login at
+    # https://get-energy-performance-data.communities.gov.uk
+    EPC_BEARER_TOKEN: str = ""
 
     # HM Land Registry CCOD dataset
     # Download the latest file from:
@@ -115,6 +117,8 @@ class Settings(BaseSettings):
         "env_file": os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"),
         "env_file_encoding": "utf-8",
         "case_sensitive": True,
+        # A retired key still sitting in .env (EPC_API_KEY) must not stop the app starting.
+        "extra": "ignore",
     }
 
 
